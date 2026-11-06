@@ -199,11 +199,11 @@ export const ConsoleModal: React.FC<Props> = ({
         if (dialogRef.current) dialogRef.current.returnValue = '';
         onClose();
       }}
-      className="w-full max-w-2xl rounded-2xl bg-slate-950/95 text-slate-100 border border-slate-700/90 shadow-[0_25px_70px_rgba(0,0,0,0.9)] p-0 backdrop:bg-black/70 backdrop:backdrop-blur-sm"
+      className="w-[94vw] max-w-2xl max-h-[90vh] max-h-[90dvh] flex flex-col rounded-2xl bg-slate-950/95 text-slate-100 border border-slate-700/90 shadow-[0_25px_70px_rgba(0,0,0,0.9)] p-0 backdrop:bg-black/75 backdrop:backdrop-blur-md overflow-hidden"
     >
       {/* Modal Header */}
       <div
-        className={`flex items-center justify-between px-5 py-3.5 border-b ${def.theme.border} ${def.theme.bg}`}
+        className={`flex items-center justify-between px-4 sm:px-5 py-3 border-b shrink-0 ${def.theme.border} ${def.theme.bg}`}
       >
         <div className="flex items-center gap-3">
           <div
@@ -242,7 +242,7 @@ export const ConsoleModal: React.FC<Props> = ({
             value="close"
             aria-label="Close console modal"
             autoFocus
-            className="p-1.5 rounded-lg bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700"
+            className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition"
           >
             <X className="w-4 h-4" />
           </button>
@@ -250,7 +250,7 @@ export const ConsoleModal: React.FC<Props> = ({
       </div>
 
       {/* Modal Body */}
-      <div className="p-5 space-y-4 max-h-[76vh] overflow-y-auto">
+      <div className="p-4 sm:p-5 space-y-4 flex-1 overflow-y-auto overscroll-contain">
         {/* 1. BRIDGE / COCKPIT */}
         {room === 'bridge' && (
           <div className="space-y-4">

@@ -84,10 +84,10 @@ export const CoopDockingModal: React.FC<Props> = ({ open, state, dispatch, onClo
       ref={dialogRef}
       aria-labelledby={titleId}
       onClose={onClose}
-      className="backdrop:bg-slate-950/80 backdrop:backdrop-blur-sm bg-slate-950 text-slate-100 rounded-3xl border border-cyan-500/50 p-0 shadow-[0_25px_60px_rgba(0,0,0,0.9)] max-w-2xl w-[92vw] overflow-hidden overscroll-contain"
+      className="backdrop:bg-slate-950/80 backdrop:backdrop-blur-sm bg-slate-950 text-slate-100 rounded-3xl border border-cyan-500/50 p-0 shadow-[0_25px_60px_rgba(0,0,0,0.9)] max-w-2xl w-[94vw] max-h-[90vh] max-h-[90dvh] flex flex-col overflow-hidden overscroll-contain"
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-slate-950 via-cyan-950/40 to-slate-950 border-b border-cyan-500/30">
+      <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 bg-gradient-to-r from-slate-950 via-cyan-950/40 to-slate-950 border-b border-cyan-500/30 shrink-0">
         <div className="flex items-center gap-3">
           <div className="p-2 rounded-xl bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
             <Users className="w-5 h-5" />
@@ -109,14 +109,14 @@ export const CoopDockingModal: React.FC<Props> = ({ open, state, dispatch, onClo
         <button
           type="button"
           onClick={onClose}
-          className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+          className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition"
           aria-label="Close"
         >
           <X className="w-5 h-5" />
         </button>
       </div>
 
-      <div className="p-6 space-y-5 max-h-[80vh] overflow-y-auto">
+      <div className="p-4 sm:p-6 space-y-5 flex-1 overflow-y-auto overscroll-contain">
         {isDocked && partner ? (
           /* ================= ACTIVE MOTHERSHIP VIEW ================= */
           <div className="space-y-4">

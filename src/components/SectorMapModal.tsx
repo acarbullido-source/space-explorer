@@ -89,10 +89,10 @@ export const SectorMapModal: React.FC<Props> = ({ open, state, dispatch, onClose
         if (dialogRef.current) dialogRef.current.returnValue = '';
         onClose();
       }}
-      className="w-full max-w-3xl rounded-2xl bg-slate-950/95 text-slate-100 border border-cyan-500/50 shadow-[0_25px_70px_rgba(0,0,0,0.9)] p-0 backdrop:bg-black/75 backdrop:backdrop-blur-sm"
+      className="w-[94vw] max-w-3xl max-h-[90vh] max-h-[90dvh] flex flex-col rounded-2xl bg-slate-950/95 text-slate-100 border border-cyan-500/50 shadow-[0_25px_70px_rgba(0,0,0,0.9)] p-0 backdrop:bg-black/80 backdrop:backdrop-blur-md overflow-hidden"
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3.5 border-b border-cyan-500/30 bg-cyan-500/10">
+      <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-cyan-500/30 bg-cyan-500/10 shrink-0">
         <div className="flex items-center gap-3">
           <div className="p-2 rounded-xl bg-slate-950/90 border border-cyan-400">
             <Compass className="w-5 h-5 text-cyan-400" />
@@ -103,7 +103,7 @@ export const SectorMapModal: React.FC<Props> = ({ open, state, dispatch, onClose
               {state.upgrades.sails > 0 && (
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-sky-500/20 text-sky-300 border border-sky-400/50">
                   <Sailboat className="w-3 h-3" />
-                  Photonic Sails Active (0 Plasma Relay-to-Relay)
+                  Photonic Sails Active
                 </span>
               )}
             </h2>
@@ -119,7 +119,7 @@ export const SectorMapModal: React.FC<Props> = ({ open, state, dispatch, onClose
             value="close"
             aria-label="Close sector map"
             autoFocus
-            className="p-1.5 rounded-lg bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700"
+            className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition"
           >
             <X className="w-4 h-4" />
           </button>
@@ -127,7 +127,7 @@ export const SectorMapModal: React.FC<Props> = ({ open, state, dispatch, onClose
       </div>
 
       {/* Star Map Graph */}
-      <div className="p-5 space-y-4">
+      <div className="p-4 sm:p-5 space-y-4 flex-1 overflow-y-auto overscroll-contain">
         {/* 5 Solar System Biomes & System Rules */}
         <div className="rounded-xl bg-slate-900/90 border border-slate-800 p-3.5 space-y-3">
           <div className="flex items-center justify-between">

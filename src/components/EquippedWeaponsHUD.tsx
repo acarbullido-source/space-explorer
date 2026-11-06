@@ -42,7 +42,7 @@ export const EquippedWeaponsHUD: React.FC<Props> = ({
   return (
     <div className="flex flex-col items-center gap-2 pointer-events-auto">
       {/* Weapons Card Row */}
-      <div className="flex flex-wrap items-center justify-center gap-2">
+      <div className="flex flex-nowrap sm:flex-wrap items-center justify-start sm:justify-center gap-2 max-w-full overflow-x-auto pb-1 px-1 overscroll-contain">
         {equippedWeapons.map((slot, idx) => {
           const def = WEAPONS[slot.weaponId];
           const isSelected = selectedSlot === idx;
@@ -53,9 +53,9 @@ export const EquippedWeaponsHUD: React.FC<Props> = ({
             <div
               key={`${slot.weaponId}-${idx}`}
               onClick={() => onSelectSlot(idx)}
-              className={`relative flex flex-col justify-between w-48 sm:w-52 p-2.5 rounded-2xl border transition-all cursor-pointer backdrop-blur-md shadow-xl ${
+              className={`relative flex flex-col justify-between min-w-[150px] w-44 sm:w-52 shrink-0 sm:shrink p-2 sm:p-2.5 rounded-2xl border transition-all cursor-pointer backdrop-blur-md shadow-xl ${
                 isSelected
-                  ? 'bg-slate-900/95 border-cyan-400 ring-2 ring-cyan-400/60 scale-105'
+                  ? 'bg-slate-900/95 border-cyan-400 ring-2 ring-cyan-400/60 scale-102 sm:scale-105'
                   : 'bg-slate-950/90 border-slate-800 hover:border-slate-700'
               }`}
             >

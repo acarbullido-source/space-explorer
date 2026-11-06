@@ -71,11 +71,11 @@ export const StoryEventModal: React.FC<Props> = ({ state, dispatch }) => {
       aria-labelledby={titleId}
       {...({ closedby: 'any' } as React.DialogHTMLAttributes<HTMLDialogElement>)}
       onClose={() => dispatch({ type: 'CLOSE_STORY_EVENT' })}
-      className="w-full max-w-2xl rounded-2xl bg-slate-950/95 text-slate-100 border border-cyan-500/50 shadow-[0_30px_90px_rgba(0,0,0,0.95)] p-0 backdrop:bg-black/80 backdrop:backdrop-blur-md overflow-hidden"
+      className="w-[94vw] max-w-2xl max-h-[90vh] max-h-[90dvh] flex flex-col rounded-2xl bg-slate-950/95 text-slate-100 border border-cyan-500/50 shadow-[0_30px_90px_rgba(0,0,0,0.95)] p-0 backdrop:bg-black/80 backdrop:backdrop-blur-md overflow-hidden"
     >
       {/* Header with Faction Badge & Glow */}
       <div
-        className="flex items-center justify-between px-5 py-3.5 border-b"
+        className="flex items-center justify-between px-4 sm:px-5 py-3 border-b shrink-0"
         style={{
           borderColor: `${faction.themeColor}40`,
           backgroundColor: `${faction.themeColor}15`,
@@ -113,14 +113,14 @@ export const StoryEventModal: React.FC<Props> = ({ state, dispatch }) => {
         <button
           type="button"
           onClick={() => dispatch({ type: 'CLOSE_STORY_EVENT' })}
-          className="p-1.5 rounded-lg bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition"
+          className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition"
           aria-label="Dismiss anomaly"
         >
           <X className="w-4 h-4" />
         </button>
       </div>
 
-      <div className="p-6 space-y-5">
+      <div className="p-4 sm:p-6 space-y-4 sm:space-y-5 flex-1 overflow-y-auto overscroll-contain">
         {/* Situation (STRICT: Max 2 Short Plain Sentences) */}
         <div className="rounded-xl bg-slate-900/90 border border-slate-800 p-4">
           <p className="text-sm text-slate-200 leading-relaxed font-medium">

@@ -90,10 +90,10 @@ export const GarageShopModal: React.FC<Props> = ({
       ref={dialogRef}
       aria-labelledby={titleId}
       onClose={onClose}
-      className="backdrop:bg-slate-950/80 backdrop:backdrop-blur-sm bg-slate-950 text-slate-100 rounded-3xl border border-cyan-500/50 p-0 shadow-[0_25px_60px_rgba(0,0,0,0.9)] max-w-4xl w-[94vw] overflow-hidden overscroll-contain"
+      className="backdrop:bg-slate-950/80 backdrop:backdrop-blur-sm bg-slate-950 text-slate-100 rounded-3xl border border-cyan-500/50 p-0 shadow-[0_25px_60px_rgba(0,0,0,0.9)] max-w-4xl w-[94vw] max-h-[90vh] max-h-[90dvh] flex flex-col overflow-hidden overscroll-contain"
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-slate-950 via-cyan-950/40 to-slate-950 border-b border-cyan-500/30">
+      <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 bg-gradient-to-r from-slate-950 via-cyan-950/40 to-slate-950 border-b border-cyan-500/30 shrink-0">
         <div className="flex items-center gap-3">
           <div className="p-2 rounded-xl bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
             <ShoppingBag className="w-5 h-5" />
@@ -105,9 +105,9 @@ export const GarageShopModal: React.FC<Props> = ({
                 ({state.encounter.name})
               </span>
             </h2>
-            <div className="flex items-center gap-3 text-xs text-slate-400 mt-0.5 font-mono">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs text-slate-400 mt-0.5 font-mono">
               <span className="text-amber-300">Spendable XP: {state.spendXp}</span>
-              <span className="text-orange-300">Scrap Cargo: {state.scrap}</span>
+              <span className="text-orange-300">Scrap: {state.scrap}</span>
               <span className="text-cyan-300">Plasma: {state.plasma}/{state.maxPlasma}</span>
             </div>
           </div>
@@ -126,7 +126,7 @@ export const GarageShopModal: React.FC<Props> = ({
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+            className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition"
             aria-label="Close"
           >
             <X className="w-5 h-5" />
@@ -135,11 +135,11 @@ export const GarageShopModal: React.FC<Props> = ({
       </div>
 
       {/* Tabs Bar */}
-      <div className="flex items-center gap-2 px-6 pt-3 border-b border-slate-800 bg-slate-950/60">
+      <div className="flex items-center gap-2 px-4 sm:px-6 pt-3 border-b border-slate-800 bg-slate-950/60 shrink-0 overflow-x-auto">
         <button
           type="button"
           onClick={() => setActiveTab('upgrades')}
-          className={`flex items-center gap-1.5 px-4 py-2 border-b-2 font-bold text-xs transition ${
+          className={`flex items-center gap-1.5 px-4 py-2 border-b-2 font-bold text-xs shrink-0 transition ${
             activeTab === 'upgrades'
               ? 'border-cyan-400 text-cyan-300'
               : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -150,7 +150,7 @@ export const GarageShopModal: React.FC<Props> = ({
         <button
           type="button"
           onClick={() => setActiveTab('shop')}
-          className={`flex items-center gap-1.5 px-4 py-2 border-b-2 font-bold text-xs transition ${
+          className={`flex items-center gap-1.5 px-4 py-2 border-b-2 font-bold text-xs shrink-0 transition ${
             activeTab === 'shop'
               ? 'border-cyan-400 text-cyan-300'
               : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -161,7 +161,7 @@ export const GarageShopModal: React.FC<Props> = ({
         <button
           type="button"
           onClick={() => setActiveTab('diplomacy')}
-          className={`flex items-center gap-1.5 px-4 py-2 border-b-2 font-bold text-xs transition ${
+          className={`flex items-center gap-1.5 px-4 py-2 border-b-2 font-bold text-xs shrink-0 transition ${
             activeTab === 'diplomacy'
               ? 'border-cyan-400 text-cyan-300'
               : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -174,7 +174,7 @@ export const GarageShopModal: React.FC<Props> = ({
         </button>
       </div>
 
-      <div className="p-6 max-h-[75vh] overflow-y-auto space-y-4">
+      <div className="p-4 sm:p-6 flex-1 overflow-y-auto overscroll-contain space-y-4">
         {/* ============================================================== */}
         {/* TAB 1: 16 MULTI-LEVEL SHIP UPGRADES                            */}
         {/* ============================================================== */}

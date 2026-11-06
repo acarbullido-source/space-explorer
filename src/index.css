@@ -43,3 +43,35 @@ dialog::backdrop {
   content-visibility: auto;
   contain-intrinsic-size: auto none auto 900px;
 }
+
+/* Mobile touch & safe-area optimizations */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+a,
+input,
+select,
+textarea,
+[role="button"] {
+  touch-action: manipulation;
+}
+
+.safe-top {
+  padding-top: max(0.5rem, env(safe-area-inset-top));
+}
+
+.safe-bottom {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+
+/* Custom scrollbars for modals */
+dialog::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+dialog::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 4px;
+}
