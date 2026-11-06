@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: #020409;
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Native <dialog> scroll containment per modern-web-guidance `dialog` rule */
+dialog:modal {
+  overscroll-behavior: contain;
+}
+dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+
+/* Draggable handle styles per modern-web-guidance `drag` rule */
+.room-drag-handle {
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.room-drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Background canvas containment per modern-web-guidance `efficient-background-processing` */
+.starfield-layer {
+  content-visibility: auto;
+  contain-intrinsic-size: auto none auto 900px;
+}
