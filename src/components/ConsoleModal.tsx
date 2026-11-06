@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef, useState } from 'react';
+import React, { useId, useState } from 'react';
 import {
   Activity,
   Anchor,
@@ -33,7 +33,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { ROOMS } from '../game/rooms';
+import { ROOMS, ROOM_ORDER } from '../game/rooms';
 import { ARK_ARTIFACTS, ARK_ARTIFACT_IDS } from '../game/storyEvents';
 import {
   convertPlasmaGain,
@@ -60,6 +60,7 @@ interface Props {
   dispatch: React.Dispatch<Action>;
   onClose: () => void;
   onMoveToConsole: (room: RoomId) => void;
+  onSelectRoom?: (room: RoomId) => void;
   onOpenSectorMap: () => void;
   onOpenCoopDocking?: () => void;
 }
@@ -135,54 +136,21 @@ export const ConsoleModal: React.FC<Props> = ({
   dispatch,
   onClose,
   onMoveToConsole,
+  onSelectRoom,
   onOpenSectorMap,
   onOpenCoopDocking,
 }) => {
-  const dialogRef = useRef<HTMLDialogElement | null>(null);
   const titleId = useId();
   const [viewportDir, setViewportDir] = useState<ViewportDir>('Front');
 
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (room) {
-      if (!dialog.open) dialog.showModal();
-    } else if (dialog.open) {
-      dialog.close();
-    }
-  }, [room]);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (!('closedBy' in HTMLDialogElement.prototype)) {
-      const outside = (e: PointerEvent) => {
-        const r = dialog.getBoundingClientRect();
-        return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
-      };
-      let pressedOutside = false;
-      const onDown = (e: PointerEvent) => {
-        pressedOutside = outside(e);
-      };
-      const onUp = (e: PointerEvent) => {
-        if (pressedOutside && outside(e)) dialog.close();
-      };
-      dialog.addEventListener('pointerdown', onDown);
-      dialog.addEventListener('pointerup', onUp);
-      return () => {
-        dialog.removeEventListener('pointerdown', onDown);
-        dialog.removeEventListener('pointerup', onUp);
-      };
-    }
-  }, []);
-
   if (!room) {
-    return <dialog ref={dialogRef} className="hidden" />;
+    return null;
   }
 
   const def = ROOMS[room];
   const Icon = def.icon;
-  const isManned = mannedRoom(state) === room;
+  const manned = mannedRoom(state);
+  const isManned = manned === room;
   const rates = lifeRates(state);
   const rankInfo = getRank(state.rankXp);
   const repBadge = getReputationBadge(state.reputation);
@@ -191,66 +159,92 @@ export const ConsoleModal: React.FC<Props> = ({
   );
 
   return (
-    <dialog
-      ref={dialogRef}
-      aria-labelledby={titleId}
-      {...({ closedby: 'any' } as React.DialogHTMLAttributes<HTMLDialogElement>)}
-      onClose={() => {
-        if (dialogRef.current) dialogRef.current.returnValue = '';
-        onClose();
-      }}
-      className="w-[94vw] max-w-2xl max-h-[90vh] max-h-[90dvh] flex flex-col rounded-2xl bg-slate-950/95 text-slate-100 border border-slate-700/90 shadow-[0_25px_70px_rgba(0,0,0,0.9)] p-0 backdrop:bg-black/75 backdrop:backdrop-blur-md overflow-hidden"
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-md"
+      onClick={onClose}
     >
-      {/* Modal Header */}
       <div
-        className={`flex items-center justify-between px-4 sm:px-5 py-3 border-b shrink-0 ${def.theme.border} ${def.theme.bg}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-2xl max-h-[90dvh] flex flex-col rounded-2xl bg-slate-950/95 text-slate-100 border border-slate-700/90 shadow-[0_25px_70px_rgba(0,0,0,0.9)] p-0 overflow-hidden"
       >
-        <div className="flex items-center gap-3">
-          <div
-            className="p-2 rounded-xl bg-slate-950/80 border"
-            style={{ borderColor: def.theme.accent }}
-          >
-            <Icon className="w-5 h-5" style={{ color: def.theme.accent }} />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 id={titleId} className="text-base font-extrabold tracking-wide text-white">
-                {def.name}
-              </h2>
-              {isManned ? (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-400/60">
-                  <UserCheck className="w-3 h-3" />
-                  MANNED (+25%)
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => onMoveToConsole(room)}
-                  className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-400/60 transition"
-                >
-                  Walk Crew Here (+25%)
-                </button>
-              )}
+        {/* Modal Header */}
+        <div
+          className={`flex items-center justify-between px-3.5 sm:px-5 py-3 border-b shrink-0 ${def.theme.border} ${def.theme.bg}`}
+        >
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div
+              className="p-2 rounded-xl bg-slate-950/80 border shrink-0"
+              style={{ borderColor: def.theme.accent }}
+            >
+              <Icon className="w-5 h-5" style={{ color: def.theme.accent }} />
             </div>
-            <p className="text-xs text-slate-300">{def.label}</p>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 id={titleId} className="text-sm sm:text-base font-extrabold tracking-wide text-white truncate">
+                  {def.name}
+                </h2>
+                {isManned ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-400/60">
+                    <UserCheck className="w-3 h-3" />
+                    MANNED (+25%)
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onMoveToConsole(room)}
+                    className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-400/60 transition"
+                  >
+                    Walk Crew Here (+25%)
+                  </button>
+                )}
+              </div>
+              <p className="text-[11px] sm:text-xs text-slate-300 truncate">{def.label}</p>
+            </div>
           </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close console modal"
+            className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition shrink-0 ml-2"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
-        <form method="dialog">
-          <button
-            type="submit"
-            value="close"
-            aria-label="Close console modal"
-            autoFocus
-            className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </form>
-      </div>
+        {/* 6-Room Quick Switcher Tab Strip */}
+        {onSelectRoom && (
+          <div className="flex items-center gap-1 px-3 py-2 border-b border-slate-800 bg-slate-950/90 overflow-x-auto touch-pan-x shrink-0">
+            {ROOM_ORDER.map((rId) => {
+              const rDef = ROOMS[rId];
+              const RIcon = rDef.icon;
+              const active = rId === room;
+              const rManned = manned === rId;
+              return (
+                <button
+                  key={rId}
+                  type="button"
+                  onClick={() => onSelectRoom(rId)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border shrink-0 transition ${
+                    active
+                      ? 'bg-slate-800 text-white border-cyan-400 shadow'
+                      : 'bg-slate-900/70 text-slate-400 border-slate-800 hover:text-slate-200'
+                  }`}
+                >
+                  <RIcon className="w-3.5 h-3.5" style={{ color: rDef.theme.accent }} />
+                  <span>{rDef.name.split(' ')[0]}</span>
+                  {rManned && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />}
+                </button>
+              );
+            })}
+          </div>
+        )}
 
-      {/* Modal Body */}
-      <div className="p-4 sm:p-5 space-y-4 flex-1 overflow-y-auto overscroll-contain">
+        {/* Modal Body */}
+        <div className="p-3.5 sm:p-5 space-y-4 flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y">
         {/* 1. BRIDGE / COCKPIT */}
         {room === 'bridge' && (
           <div className="space-y-4">
@@ -1164,7 +1158,8 @@ export const ConsoleModal: React.FC<Props> = ({
             <PlasmaAllocationPanel state={state} dispatch={dispatch} />
           </div>
         )}
+        </div>
       </div>
-    </dialog>
+    </div>
   );
 };

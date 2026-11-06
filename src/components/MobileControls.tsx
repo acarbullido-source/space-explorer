@@ -5,33 +5,59 @@ import {
   ArrowRight,
   ArrowUp,
   Compass,
-  Flame,
+  Gamepad2,
   Pause,
   Play,
+  SkipForward,
+  Terminal,
+  UserCheck,
+  X,
+  Zap,
 } from 'lucide-react';
-import type { Dir, RoomId } from '../game/types';
-import { ROOMS } from '../game/rooms';
+import type { Cell, Dir, GameState, RoomId } from '../game/types';
+import { ROOMS, ROOM_ORDER } from '../game/rooms';
+import { consoleCell } from '../game/layout';
+import { mannedRoom } from '../game/state';
 
 interface Props {
+  state: GameState;
   inCombat: boolean;
   currentRoom: RoomId | null;
   onMoveDir: (dir: Dir) => void;
   onInteract: () => void;
-  onTogglePauseOrFire: () => void;
+  onSelectRoomConsole: (roomId: RoomId, cell: Cell) => void;
+  onWalkToRoom: (roomId: RoomId, cell: Cell) => void;
+  onTogglePause: () => void;
+  onStepTurn: () => void;
   onOpenMap: () => void;
-  paused: boolean;
+  onTogglePowerDrawer: () => void;
+  powerDrawerOpen: boolean;
 }
 
+const SHORT_ROOM_NAME: Record<RoomId, string> = {
+  bridge: 'Bridge',
+  comms: 'Comms',
+  life: 'Life',
+  science: 'Shields',
+  airlock: 'Airlock',
+  engineering: 'Engines',
+};
+
 export const MobileControls: React.FC<Props> = ({
+  state,
   inCombat,
   currentRoom,
   onMoveDir,
   onInteract,
-  onTogglePauseOrFire,
+  onSelectRoomConsole,
+  onWalkToRoom,
+  onTogglePause,
+  onStepTurn,
   onOpenMap,
-  paused,
+  onTogglePowerDrawer,
+  powerDrawerOpen,
 }) => {
-  const [showDpad, setShowDpad] = useState(true);
+  const [showDpad, setShowDpad] = useState(false);
   const repeatTimer = useRef<number | null>(null);
 
   const startMove = (dir: Dir) => {
@@ -55,17 +81,26 @@ export const MobileControls: React.FC<Props> = ({
     };
   }, []);
 
+  const manned = mannedRoom(state);
   const roomDef = currentRoom ? ROOMS[currentRoom] : null;
 
   return (
-    <div className="md:hidden pointer-events-none fixed inset-x-0 bottom-0 z-30 flex items-end justify-between p-3 pb-safe-bottom select-none">
-      {/* LEFT: Virtual D-Pad (Direction Controls) */}
-      <div className="pointer-events-auto flex flex-col items-center gap-1.5">
-        {showDpad && (
-          <div className="relative w-36 h-36 rounded-full bg-slate-950/85 border border-cyan-500/40 shadow-[0_0_25px_rgba(0,0,0,0.8)] backdrop-blur-md p-1.5 flex items-center justify-center">
-            {/* Center Core */}
-            <div className="w-10 h-10 rounded-full bg-slate-900 border border-slate-700/80 flex items-center justify-center text-[10px] font-extrabold text-cyan-300">
-              WASD
+    <div className="md:hidden relative z-20 w-full bg-slate-950/95 border-t border-slate-800/90 px-2.5 pt-2 pb-2 safe-bottom select-none">
+      {/* Optional Pop-Up Directional D-Pad (Only shown when toggled by player) */}
+      {showDpad && (
+        <div className="absolute bottom-full left-3 mb-2 z-30 flex flex-col items-start gap-1">
+          <div className="relative w-32 h-32 rounded-2xl bg-slate-950/95 border border-cyan-500/50 shadow-[0_10px_30px_rgba(0,0,0,0.9)] backdrop-blur-md p-1.5 flex items-center justify-center">
+            <button
+              type="button"
+              onClick={() => setShowDpad(false)}
+              className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-slate-800 border border-slate-600 text-slate-200 flex items-center justify-center shadow"
+              aria-label="Close D-Pad"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+
+            <div className="w-8 h-8 rounded-full bg-slate-900 border border-slate-700/80 flex items-center justify-center text-[9px] font-extrabold text-cyan-300">
+              STEP
             </div>
 
             {/* UP (N) */}
@@ -79,9 +114,9 @@ export const MobileControls: React.FC<Props> = ({
               onPointerUp={stopMove}
               onPointerLeave={stopMove}
               onPointerCancel={stopMove}
-              className="absolute top-1 left-1/2 -translate-x-1/2 w-11 h-11 rounded-t-xl bg-slate-900/90 hover:bg-cyan-500/30 active:bg-cyan-500/50 border border-cyan-400/40 text-cyan-200 flex items-center justify-center shadow-lg active:scale-95 transition"
+              className="absolute top-1 left-1/2 -translate-x-1/2 w-10 h-10 rounded-t-xl bg-slate-900 hover:bg-cyan-500/30 active:bg-cyan-500/50 border border-cyan-400/40 text-cyan-200 flex items-center justify-center active:scale-95"
             >
-              <ArrowUp className="w-5 h-5" />
+              <ArrowUp className="w-4 h-4" />
             </button>
 
             {/* DOWN (S) */}
@@ -95,9 +130,9 @@ export const MobileControls: React.FC<Props> = ({
               onPointerUp={stopMove}
               onPointerLeave={stopMove}
               onPointerCancel={stopMove}
-              className="absolute bottom-1 left-1/2 -translate-x-1/2 w-11 h-11 rounded-b-xl bg-slate-900/90 hover:bg-cyan-500/30 active:bg-cyan-500/50 border border-cyan-400/40 text-cyan-200 flex items-center justify-center shadow-lg active:scale-95 transition"
+              className="absolute bottom-1 left-1/2 -translate-x-1/2 w-10 h-10 rounded-b-xl bg-slate-900 hover:bg-cyan-500/30 active:bg-cyan-500/50 border border-cyan-400/40 text-cyan-200 flex items-center justify-center active:scale-95"
             >
-              <ArrowDown className="w-5 h-5" />
+              <ArrowDown className="w-4 h-4" />
             </button>
 
             {/* LEFT (W) */}
@@ -111,9 +146,9 @@ export const MobileControls: React.FC<Props> = ({
               onPointerUp={stopMove}
               onPointerLeave={stopMove}
               onPointerCancel={stopMove}
-              className="absolute left-1 top-1/2 -translate-y-1/2 w-11 h-11 rounded-l-xl bg-slate-900/90 hover:bg-cyan-500/30 active:bg-cyan-500/50 border border-cyan-400/40 text-cyan-200 flex items-center justify-center shadow-lg active:scale-95 transition"
+              className="absolute left-1 top-1/2 -translate-y-1/2 w-10 h-10 rounded-l-xl bg-slate-900 hover:bg-cyan-500/30 active:bg-cyan-500/50 border border-cyan-400/40 text-cyan-200 flex items-center justify-center active:scale-95"
             >
-              <ArrowLeft className="w-5 h-5" />
+              <ArrowLeft className="w-4 h-4" />
             </button>
 
             {/* RIGHT (E) */}
@@ -127,85 +162,145 @@ export const MobileControls: React.FC<Props> = ({
               onPointerUp={stopMove}
               onPointerLeave={stopMove}
               onPointerCancel={stopMove}
-              className="absolute right-1 top-1/2 -translate-y-1/2 w-11 h-11 rounded-r-xl bg-slate-900/90 hover:bg-cyan-500/30 active:bg-cyan-500/50 border border-cyan-400/40 text-cyan-200 flex items-center justify-center shadow-lg active:scale-95 transition"
+              className="absolute right-1 top-1/2 -translate-y-1/2 w-10 h-10 rounded-r-xl bg-slate-900 hover:bg-cyan-500/30 active:bg-cyan-500/50 border border-cyan-400/40 text-cyan-200 flex items-center justify-center active:scale-95"
             >
-              <ArrowRight className="w-5 h-5" />
+              <ArrowRight className="w-4 h-4" />
             </button>
           </div>
-        )}
+        </div>
+      )}
 
-        <button
-          type="button"
-          onClick={() => setShowDpad((v) => !v)}
-          className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-slate-950/80 text-slate-300 border border-slate-700/80 shadow backdrop-blur-md"
-        >
-          {showDpad ? 'Hide D-Pad' : 'Show D-Pad'}
-        </button>
+      {/* ROW 1: 6-Room Quick Crew & Console Strip */}
+      <div className="grid grid-cols-6 gap-1 mb-1.5">
+        {ROOM_ORDER.map((id) => {
+          const def = ROOMS[id];
+          const Icon = def.icon;
+          const isManned = manned === id;
+          const isHere = currentRoom === id;
+          const hp = state.roomHp[id];
+          const p = state.layout.find((r) => r.id === id)!;
+          const cCell = consoleCell(p);
+
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => {
+                if (inCombat) {
+                  // In combat, tapping a room walks crew there to man it (+25%) or repair it
+                  onWalkToRoom(id, cCell);
+                } else {
+                  // Outside combat, tapping a room walks crew there and opens its console
+                  onSelectRoomConsole(id, cCell);
+                }
+              }}
+              className={`flex flex-col items-center justify-center py-1 px-1 rounded-xl border transition active:scale-95 ${
+                isManned
+                  ? 'bg-emerald-950/60 border-emerald-400/80'
+                  : isHere
+                    ? 'bg-slate-900 border-cyan-400/70'
+                    : 'bg-slate-900/80 border-slate-800'
+              }`}
+            >
+              <div className="flex items-center gap-1">
+                <Icon className="w-3.5 h-3.5 shrink-0" style={{ color: def.theme.accent }} />
+                {isManned && <UserCheck className="w-2.5 h-2.5 text-emerald-400" />}
+              </div>
+              <span className="text-[10px] font-bold text-white truncate max-w-full leading-tight mt-0.5">
+                {SHORT_ROOM_NAME[id]}
+              </span>
+              <div className="flex items-center gap-0.5 mt-0.5">
+                {Array.from({ length: def.maxHp }).map((_, i) => (
+                  <span
+                    key={i}
+                    className={`w-1.5 h-1 rounded-sm ${
+                      i < hp ? 'bg-emerald-400' : 'bg-red-500/60'
+                    }`}
+                  />
+                ))}
+              </div>
+            </button>
+          );
+        })}
       </div>
 
-      {/* RIGHT: Primary Action Thumb Buttons */}
-      <div className="pointer-events-auto flex flex-col items-end gap-2.5">
-        {/* Quick Map Button */}
-        <button
-          type="button"
-          onClick={onOpenMap}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-extrabold bg-slate-900/90 hover:bg-slate-800 text-cyan-300 border border-cyan-500/50 shadow-[0_4px_16px_rgba(0,0,0,0.7)] backdrop-blur-md active:scale-95 transition"
-          aria-label="Open Sector Map"
-        >
-          <Compass className="w-4 h-4 text-cyan-400" />
-          <span>Star Map [M]</span>
-        </button>
+      {/* ROW 2: Primary Action Bar (Out of Combat) */}
+      {!inCombat && (
+        <div className="grid grid-cols-5 gap-1.5">
+          {/* 1. Toggle D-Pad */}
+          <button
+            type="button"
+            onClick={() => setShowDpad((v) => !v)}
+            className={`flex items-center justify-center gap-1 py-2 px-2 rounded-xl text-[11px] font-extrabold border transition active:scale-95 ${
+              showDpad
+                ? 'bg-cyan-500/25 border-cyan-400 text-cyan-200'
+                : 'bg-slate-900 border-slate-800 text-slate-300'
+            }`}
+          >
+            <Gamepad2 className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+            <span>D-Pad</span>
+          </button>
 
-        <div className="flex items-center gap-2">
-          {/* Action E Button: Interact with Current Room */}
+          {/* 2. Open Current Room Console */}
           <button
             type="button"
             onClick={onInteract}
-            className={`flex flex-col items-center justify-center w-16 h-16 rounded-2xl border-2 shadow-[0_8px_24px_rgba(0,0,0,0.85)] active:scale-95 transition backdrop-blur-md ${
-              roomDef
-                ? 'bg-gradient-to-br from-cyan-950 to-slate-900 border-cyan-400 text-cyan-200'
-                : 'bg-slate-950/90 border-slate-700 text-slate-400'
-            }`}
-            aria-label="Interact Console (E)"
+            className="flex items-center justify-center gap-1 py-2 px-2 rounded-xl text-[11px] font-extrabold bg-cyan-500/20 border border-cyan-400/60 text-cyan-200 transition active:scale-95"
           >
-            <span className="text-base font-black tracking-wide leading-none">E</span>
-            <span className="text-[9px] font-extrabold mt-1 truncate max-w-[56px] text-center">
-              {roomDef ? roomDef.name.split(' ')[0] : 'Bridge'}
-            </span>
+            <Terminal className="w-3.5 h-3.5 text-cyan-300 shrink-0" />
+            <span className="truncate">{roomDef ? SHORT_ROOM_NAME[currentRoom!] : 'Console'}</span>
           </button>
 
-          {/* Action Space Button: Fire in Combat / Pause Outside */}
+          {/* 3. Toggle Power & Stats Drawer */}
           <button
             type="button"
-            onClick={onTogglePauseOrFire}
-            className={`flex flex-col items-center justify-center w-16 h-16 rounded-2xl border-2 shadow-[0_8px_24px_rgba(0,0,0,0.85)] active:scale-95 transition backdrop-blur-md ${
-              inCombat
-                ? 'bg-gradient-to-br from-red-600 to-amber-700 border-red-300 text-white animate-pulse'
-                : paused
-                  ? 'bg-amber-400 border-amber-200 text-slate-950 font-black'
-                  : 'bg-slate-900/90 border-slate-600 text-slate-200'
+            onClick={onTogglePowerDrawer}
+            className={`flex items-center justify-center gap-1 py-2 px-2 rounded-xl text-[11px] font-extrabold border transition active:scale-95 ${
+              powerDrawerOpen
+                ? 'bg-amber-500/25 border-amber-400 text-amber-200'
+                : 'bg-slate-900 border-slate-800 text-cyan-300'
             }`}
-            aria-label={inCombat ? 'Fire Weapons (Space)' : 'Toggle Pause (Space)'}
           >
-            {inCombat ? (
-              <>
-                <Flame className="w-5 h-5 text-yellow-300 animate-pulse" />
-                <span className="text-[10px] font-black uppercase mt-0.5">FIRE</span>
-              </>
-            ) : paused ? (
-              <>
-                <Play className="w-5 h-5" />
-                <span className="text-[10px] font-extrabold mt-0.5">PLAY</span>
-              </>
-            ) : (
-              <>
-                <Pause className="w-5 h-5 text-cyan-300" />
-                <span className="text-[10px] font-extrabold mt-0.5 text-cyan-200">PAUSE</span>
-              </>
-            )}
+            <Zap className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+            <span>Power</span>
+          </button>
+
+          {/* 4. Pause / Play + Step Turn */}
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={onTogglePause}
+              className={`flex-1 flex items-center justify-center py-2 rounded-xl text-[11px] font-extrabold border transition active:scale-95 ${
+                state.paused
+                  ? 'bg-amber-400 border-amber-300 text-slate-950'
+                  : 'bg-slate-900 border-slate-800 text-slate-200'
+              }`}
+              aria-label={state.paused ? 'Resume' : 'Pause'}
+            >
+              {state.paused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+            </button>
+            <button
+              type="button"
+              onClick={onStepTurn}
+              className="flex-1 flex items-center justify-center py-2 rounded-xl text-[10px] font-mono font-bold bg-slate-900 border border-slate-800 text-cyan-300 active:scale-95"
+              title="Advance 1 Turn"
+            >
+              <SkipForward className="w-3 h-3 mr-0.5" />
+              {state.turn}
+            </button>
+          </div>
+
+          {/* 5. Open Star Map */}
+          <button
+            type="button"
+            onClick={onOpenMap}
+            className="flex items-center justify-center gap-1 py-2 px-2 rounded-xl text-[11px] font-extrabold bg-sky-500/20 border border-sky-400/60 text-sky-200 transition active:scale-95"
+          >
+            <Compass className="w-3.5 h-3.5 text-sky-300 shrink-0" />
+            <span>Map</span>
           </button>
         </div>
-      </div>
+      )}
     </div>
   );
 };

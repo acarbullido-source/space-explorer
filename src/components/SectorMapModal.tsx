@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef } from 'react';
+import React, { useId } from 'react';
 import {
   Compass,
   Flame,
@@ -8,7 +8,6 @@ import {
   Radio,
   Rocket,
   Sailboat,
-  Sparkles,
   Sun,
   X,
   Zap,
@@ -38,96 +37,59 @@ export const NODE_META: Record<NodeType, { label: string; color: string }> = {
 };
 
 export const SectorMapModal: React.FC<Props> = ({ open, state, dispatch, onClose }) => {
-  const dialogRef = useRef<HTMLDialogElement | null>(null);
   const titleId = useId();
 
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (open) {
-      if (!dialog.open) dialog.showModal();
-    } else if (dialog.open) {
-      dialog.close();
-    }
-  }, [open]);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (!('closedBy' in HTMLDialogElement.prototype)) {
-      const outside = (e: PointerEvent) => {
-        const r = dialog.getBoundingClientRect();
-        return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
-      };
-      let pressedOutside = false;
-      const onDown = (e: PointerEvent) => {
-        pressedOutside = outside(e);
-      };
-      const onUp = (e: PointerEvent) => {
-        if (pressedOutside && outside(e)) dialog.close();
-      };
-      dialog.addEventListener('pointerdown', onDown);
-      dialog.addEventListener('pointerup', onUp);
-      return () => {
-        dialog.removeEventListener('pointerdown', onDown);
-        dialog.removeEventListener('pointerup', onUp);
-      };
-    }
-  }, []);
-
-  if (!open) return <dialog ref={dialogRef} className="hidden" />;
+  if (!open) return null;
 
   const curNode = state.nodes[state.current];
   const canScan = sensorsOn(state);
 
   return (
-    <dialog
-      ref={dialogRef}
-      aria-labelledby={titleId}
-      {...({ closedby: 'any' } as React.DialogHTMLAttributes<HTMLDialogElement>)}
-      onClose={() => {
-        if (dialogRef.current) dialogRef.current.returnValue = '';
-        onClose();
-      }}
-      className="w-[94vw] max-w-3xl max-h-[90vh] max-h-[90dvh] flex flex-col rounded-2xl bg-slate-950/95 text-slate-100 border border-cyan-500/50 shadow-[0_25px_70px_rgba(0,0,0,0.9)] p-0 backdrop:bg-black/80 backdrop:backdrop-blur-md overflow-hidden"
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-md"
+      onClick={onClose}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-b border-cyan-500/30 bg-cyan-500/10 shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-xl bg-slate-950/90 border border-cyan-400">
-            <Compass className="w-5 h-5 text-cyan-400" />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-3xl max-h-[90dvh] flex flex-col rounded-2xl bg-slate-950/95 text-slate-100 border border-cyan-500/50 shadow-[0_25px_70px_rgba(0,0,0,0.9)] p-0 overflow-hidden"
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-3.5 sm:px-5 py-3 border-b border-cyan-500/30 bg-cyan-500/10 shrink-0">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div className="p-2 rounded-xl bg-slate-950/90 border border-cyan-400 shrink-0">
+              <Compass className="w-5 h-5 text-cyan-400" />
+            </div>
+            <div className="min-w-0">
+              <h2 id={titleId} className="text-sm sm:text-base font-extrabold tracking-wide text-white flex flex-wrap items-center gap-2">
+                <span>Sector {state.sector} Star Map</span>
+                {state.upgrades.sails > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold bg-sky-500/20 text-sky-300 border border-sky-400/50">
+                    <Sailboat className="w-3 h-3" />
+                    Photonic Sails
+                  </span>
+                )}
+              </h2>
+              <p className="text-[11px] sm:text-xs text-slate-300">
+                Tap any connected beacon to jump. Cyan dashed lanes use Photonic Sails for 0 Plasma!
+              </p>
+            </div>
           </div>
-          <div>
-            <h2 id={titleId} className="text-base font-extrabold tracking-wide text-white flex items-center gap-2">
-              Sector {state.sector} Star Map
-              {state.upgrades.sails > 0 && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-sky-500/20 text-sky-300 border border-sky-400/50">
-                  <Sailboat className="w-3 h-3" />
-                  Photonic Sails Active
-                </span>
-              )}
-            </h2>
-            <p className="text-xs text-slate-300">
-              Click any connected beacon to jump. Cyan dashed lanes use Photonic Sails for 0 Plasma!
-            </p>
-          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close sector map"
+            className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition shrink-0 ml-2"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
-        <form method="dialog">
-          <button
-            type="submit"
-            value="close"
-            aria-label="Close sector map"
-            autoFocus
-            className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </form>
-      </div>
-
-      {/* Star Map Graph */}
-      <div className="p-4 sm:p-5 space-y-4 flex-1 overflow-y-auto overscroll-contain">
+        {/* Star Map Graph */}
+        <div className="p-3.5 sm:p-5 space-y-3.5 flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y">
         {/* 5 Solar System Biomes & System Rules */}
         <div className="rounded-xl bg-slate-900/90 border border-slate-800 p-3.5 space-y-3">
           <div className="flex items-center justify-between">
@@ -287,6 +249,15 @@ export const SectorMapModal: React.FC<Props> = ({ open, state, dispatch, onClose
                 }}
                 className={canJump ? 'cursor-pointer' : 'opacity-80'}
               >
+                {/* Invisible large touch hit-target for mobile */}
+                {canJump && (
+                  <circle
+                    cx={n.x * 680}
+                    cy={n.y * 260}
+                    r={28}
+                    fill="transparent"
+                  />
+                )}
                 {/* Relay Halo */}
                 {n.relay && (
                   <circle
@@ -313,7 +284,7 @@ export const SectorMapModal: React.FC<Props> = ({ open, state, dispatch, onClose
                 <circle
                   cx={n.x * 680}
                   cy={n.y * 260}
-                  r={canJump ? 10 : 7.5}
+                  r={canJump ? 11 : 7.5}
                   fill={meta.color}
                   stroke="#020617"
                   strokeWidth={2}
@@ -345,6 +316,62 @@ export const SectorMapModal: React.FC<Props> = ({ open, state, dispatch, onClose
           })}
         </svg>
 
+        {/* Quick 1-Tap Connected Beacon Jump Buttons (Great for Mobile & Desktop) */}
+        <div className="space-y-1.5">
+          <div className="text-[11px] font-bold uppercase tracking-wider text-cyan-300">
+            Connected Beacons — Tap to Jump
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+            {curNode.links.map((lid) => {
+              const targetNode = state.nodes[lid];
+              if (!targetNode) return null;
+              const known =
+                targetNode.visited ||
+                canScan ||
+                targetNode.type === 'garage' ||
+                targetNode.type === 'exit' ||
+                targetNode.relay;
+              const meta = known
+                ? NODE_META[targetNode.type]
+                : { label: 'Unscanned Beacon', color: '#64748b' };
+              const { cost, photonic } = jumpPlasmaCost(state, targetNode.id);
+              const canAfford = state.plasma >= cost;
+
+              return (
+                <button
+                  key={targetNode.id}
+                  type="button"
+                  disabled={!canAfford}
+                  onClick={() => {
+                    dispatch({ type: 'JUMP', node: targetNode.id });
+                    onClose();
+                  }}
+                  className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-900/90 hover:bg-slate-800 disabled:opacity-40 border border-slate-700 hover:border-cyan-400/60 text-left transition"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span
+                      className="w-3 h-3 rounded-full shrink-0"
+                      style={{ backgroundColor: meta.color }}
+                    />
+                    <span className="text-xs font-extrabold text-white truncate">
+                      {meta.label}
+                    </span>
+                  </div>
+                  <span
+                    className={`text-[11px] font-mono font-bold shrink-0 px-2 py-0.5 rounded-md ${
+                      photonic
+                        ? 'bg-sky-500/20 text-sky-300 border border-sky-400/40'
+                        : 'bg-amber-500/15 text-amber-300 border border-amber-400/30'
+                    }`}
+                  >
+                    {photonic ? '0P (Sail)' : `−${cost}P`}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         {/* Legend */}
         <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400 pt-1">
           <div className="flex flex-wrap items-center gap-3">
@@ -352,11 +379,9 @@ export const SectorMapModal: React.FC<Props> = ({ open, state, dispatch, onClose
               <Radio className="w-3.5 h-3.5" /> Dashed ring = Laser Relay Beacon (0 Plasma jump between relays with Photonic Sails)
             </span>
           </div>
-          <span className="inline-flex items-center gap-1 text-slate-300">
-            <Sparkles className="w-3.5 h-3.5 text-amber-300" /> Press <kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 font-mono text-[10px]">M</kbd> or <kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 font-mono text-[10px]">Esc</kbd> to close
-          </span>
+        </div>
         </div>
       </div>
-    </dialog>
+    </div>
   );
 };

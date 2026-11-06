@@ -55,9 +55,9 @@ export const EnemyShipView: React.FC<Props> = ({
   const factionDef = FACTIONS[enemy.faction ?? 'terran'] ?? FACTIONS.terran;
 
   return (
-    <div className="relative flex flex-col items-center justify-center p-3 select-none">
+    <div className="relative w-full h-full flex flex-col items-center justify-center p-1.5 sm:p-3 select-none overflow-y-auto">
       {/* Target Lock Guidance Header */}
-      <div className="w-full flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl bg-slate-950/85 border border-red-500/40 mb-2">
+      <div className="w-full flex flex-wrap items-center justify-between gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-950/85 border border-red-500/40 mb-1.5 shrink-0">
         <div className="flex items-center gap-2">
           <Crosshair className="w-4 h-4 text-red-400 shrink-0" />
           <div className="flex items-center gap-1.5">
@@ -111,14 +111,14 @@ export const EnemyShipView: React.FC<Props> = ({
       </div>
 
       {selectedWeaponDef && (
-        <div className="text-[11px] text-cyan-300 font-bold mb-1 flex items-center gap-1.5">
+        <div className="text-[11px] text-cyan-300 font-bold mb-1 flex items-center gap-1.5 shrink-0">
           <Crosshair className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
-          Click an Enemy Room to lock target for: <span className="underline">{selectedWeaponDef.name}</span>
+          <span>Tap an Enemy Room to lock target for: <span className="underline">{selectedWeaponDef.name}</span></span>
         </div>
       )}
 
       {/* Enemy Ship Top-Down Cutaway SVG */}
-      <div className="relative w-full max-w-[440px] aspect-[16/10] flex items-center justify-center">
+      <div className="relative w-full max-w-[420px] max-h-[160px] sm:max-h-[250px] aspect-[16/10] flex items-center justify-center shrink-0">
         <svg
           viewBox="0 0 440 260"
           className="w-full h-full drop-shadow-[0_15px_35px_rgba(0,0,0,0.85)]"

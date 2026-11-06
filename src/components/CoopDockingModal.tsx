@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef, useState } from 'react';
+import React, { useId, useState } from 'react';
 import {
   AlertCircle,
   Check,
@@ -26,44 +26,11 @@ interface Props {
 }
 
 export const CoopDockingModal: React.FC<Props> = ({ open, state, dispatch, onClose }) => {
-  const dialogRef = useRef<HTMLDialogElement | null>(null);
   const titleId = useId();
   const [roomCodeInput, setRoomCodeInput] = useState(state.mothership.roomCode || '7249');
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (open) {
-      if (!dialog.open) dialog.showModal();
-    } else if (dialog.open) {
-      dialog.close();
-    }
-  }, [open]);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (!('closedBy' in HTMLDialogElement.prototype)) {
-      const outside = (e: PointerEvent) => {
-        const r = dialog.getBoundingClientRect();
-        return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
-      };
-      let pressedOutside = false;
-      const onDown = (e: PointerEvent) => {
-        pressedOutside = outside(e);
-      };
-      const onUp = (e: PointerEvent) => {
-        if (pressedOutside && outside(e)) dialog.close();
-      };
-      dialog.addEventListener('pointerdown', onDown);
-      dialog.addEventListener('pointerup', onUp);
-      return () => {
-        dialog.removeEventListener('pointerdown', onDown);
-        dialog.removeEventListener('pointerup', onUp);
-      };
-    }
-  }, []);
+  if (!open) return null;
 
   const isDocked = state.mothership.active && !!state.mothership.partner;
   const partner = state.mothership.partner;
@@ -80,43 +47,48 @@ export const CoopDockingModal: React.FC<Props> = ({ open, state, dispatch, onClo
   };
 
   return (
-    <dialog
-      ref={dialogRef}
-      aria-labelledby={titleId}
-      onClose={onClose}
-      className="backdrop:bg-slate-950/80 backdrop:backdrop-blur-sm bg-slate-950 text-slate-100 rounded-3xl border border-cyan-500/50 p-0 shadow-[0_25px_60px_rgba(0,0,0,0.9)] max-w-2xl w-[94vw] max-h-[90vh] max-h-[90dvh] flex flex-col overflow-hidden overscroll-contain"
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-md"
+      onClick={onClose}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 bg-gradient-to-r from-slate-950 via-cyan-950/40 to-slate-950 border-b border-cyan-500/30 shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-xl bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
-            <Users className="w-5 h-5" />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onClick={(e) => e.stopPropagation()}
+        className="bg-slate-950 text-slate-100 rounded-2xl sm:rounded-3xl border border-cyan-500/50 p-0 shadow-[0_25px_60px_rgba(0,0,0,0.9)] max-w-2xl w-full max-h-[90dvh] flex flex-col overflow-hidden"
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 bg-gradient-to-r from-slate-950 via-cyan-950/40 to-slate-950 border-b border-cyan-500/30 shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="p-2 rounded-xl bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shrink-0">
+              <Users className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <h2 id={titleId} className="text-sm sm:text-base font-extrabold text-white flex flex-wrap items-center gap-2">
+                <span>Co-Op Ship Docking ("Mothership")</span>
+                {isDocked && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-400/50">
+                    DOCK CLAMPS LOCKED
+                  </span>
+                )}
+              </h2>
+              <p className="text-[11px] sm:text-xs text-slate-400 line-clamp-2">
+                Link two vessels into a unified Mothership. Pool Plasma reserves, share shields & walk between decks.
+              </p>
+            </div>
           </div>
-          <div>
-            <h2 id={titleId} className="text-base font-extrabold text-white flex items-center gap-2">
-              Co-Op Ship Docking ("Mothership" Mode)
-              {isDocked && (
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-400/50">
-                  DOCK CLAMPS LOCKED
-                </span>
-              )}
-            </h2>
-            <p className="text-xs text-slate-400">
-              Link two vessels into a unified Mothership. Pool Plasma reserves, share shields & walk freely between decks.
-            </p>
-          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition shrink-0 ml-2"
+            aria-label="Close"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition"
-          aria-label="Close"
-        >
-          <X className="w-5 h-5" />
-        </button>
-      </div>
 
-      <div className="p-4 sm:p-6 space-y-5 flex-1 overflow-y-auto overscroll-contain">
+        <div className="p-3.5 sm:p-6 space-y-4 flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y">
         {isDocked && partner ? (
           /* ================= ACTIVE MOTHERSHIP VIEW ================= */
           <div className="space-y-4">
@@ -306,8 +278,9 @@ export const CoopDockingModal: React.FC<Props> = ({ open, state, dispatch, onClo
             </div>
           </div>
         )}
+        </div>
       </div>
-    </dialog>
+    </div>
   );
 };
 export default CoopDockingModal;

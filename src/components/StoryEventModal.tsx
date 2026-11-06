@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef } from 'react';
+import React, { useId } from 'react';
 import {
   AlertCircle,
   Award,
@@ -20,107 +20,74 @@ interface Props {
 }
 
 export const StoryEventModal: React.FC<Props> = ({ state, dispatch }) => {
-  const dialogRef = useRef<HTMLDialogElement | null>(null);
   const titleId = useId();
   const event = state.activeStoryEvent;
   const outcome = state.storyOutcome;
 
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (event) {
-      if (!dialog.open) dialog.showModal();
-    } else if (dialog.open) {
-      dialog.close();
-    }
-  }, [event]);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (!('closedBy' in HTMLDialogElement.prototype)) {
-      const outside = (e: PointerEvent) => {
-        const r = dialog.getBoundingClientRect();
-        return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
-      };
-      let pressedOutside = false;
-      const onDown = (e: PointerEvent) => {
-        pressedOutside = outside(e);
-      };
-      const onUp = (e: PointerEvent) => {
-        if (pressedOutside && outside(e)) {
-          dispatch({ type: 'CLOSE_STORY_EVENT' });
-        }
-      };
-      dialog.addEventListener('pointerdown', onDown);
-      dialog.addEventListener('pointerup', onUp);
-      return () => {
-        dialog.removeEventListener('pointerdown', onDown);
-        dialog.removeEventListener('pointerup', onUp);
-      };
-    }
-  }, [dispatch]);
-
-  if (!event) return <dialog ref={dialogRef} className="hidden" />;
+  if (!event) return null;
 
   const faction = FACTIONS[event.factionId] ?? FACTIONS.terran;
 
   return (
-    <dialog
-      ref={dialogRef}
-      aria-labelledby={titleId}
-      {...({ closedby: 'any' } as React.DialogHTMLAttributes<HTMLDialogElement>)}
-      onClose={() => dispatch({ type: 'CLOSE_STORY_EVENT' })}
-      className="w-[94vw] max-w-2xl max-h-[90vh] max-h-[90dvh] flex flex-col rounded-2xl bg-slate-950/95 text-slate-100 border border-cyan-500/50 shadow-[0_30px_90px_rgba(0,0,0,0.95)] p-0 backdrop:bg-black/80 backdrop:backdrop-blur-md overflow-hidden"
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-md"
+      onClick={() => dispatch({ type: 'CLOSE_STORY_EVENT' })}
     >
-      {/* Header with Faction Badge & Glow */}
       <div
-        className="flex items-center justify-between px-4 sm:px-5 py-3 border-b shrink-0"
-        style={{
-          borderColor: `${faction.themeColor}40`,
-          backgroundColor: `${faction.themeColor}15`,
-        }}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-2xl max-h-[90dvh] flex flex-col rounded-2xl bg-slate-950/95 text-slate-100 border border-cyan-500/50 shadow-[0_30px_90px_rgba(0,0,0,0.95)] p-0 overflow-hidden"
       >
-        <div className="flex items-center gap-3">
-          <div
-            className="p-2 rounded-xl border bg-slate-950/90"
-            style={{ borderColor: faction.themeColor }}
-          >
-            <Radio className="w-5 h-5" style={{ color: faction.themeColor }} />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span
-                className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full border"
-                style={{
-                  color: faction.themeColor,
-                  borderColor: `${faction.themeColor}60`,
-                  backgroundColor: `${faction.themeColor}20`,
-                }}
-              >
-                {faction.name} Anomaly
-              </span>
-              <span className="text-xs text-slate-400 font-mono">
-                {faction.speciesName}
-              </span>
+        {/* Header with Faction Badge & Glow */}
+        <div
+          className="flex items-center justify-between px-4 sm:px-5 py-3 border-b shrink-0"
+          style={{
+            borderColor: `${faction.themeColor}40`,
+            backgroundColor: `${faction.themeColor}15`,
+          }}
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div
+              className="p-2 rounded-xl border bg-slate-950/90 shrink-0"
+              style={{ borderColor: faction.themeColor }}
+            >
+              <Radio className="w-5 h-5" style={{ color: faction.themeColor }} />
             </div>
-            <h2 id={titleId} className="text-base font-extrabold text-white mt-0.5">
-              {event.title}
-            </h2>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full border"
+                  style={{
+                    color: faction.themeColor,
+                    borderColor: `${faction.themeColor}60`,
+                    backgroundColor: `${faction.themeColor}20`,
+                  }}
+                >
+                  {faction.name} Anomaly
+                </span>
+                <span className="text-xs text-slate-400 font-mono">
+                  {faction.speciesName}
+                </span>
+              </div>
+              <h2 id={titleId} className="text-sm sm:text-base font-extrabold text-white mt-0.5 truncate">
+                {event.title}
+              </h2>
+            </div>
           </div>
+
+          <button
+            type="button"
+            onClick={() => dispatch({ type: 'CLOSE_STORY_EVENT' })}
+            className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition shrink-0 ml-2"
+            aria-label="Dismiss anomaly"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
 
-        <button
-          type="button"
-          onClick={() => dispatch({ type: 'CLOSE_STORY_EVENT' })}
-          className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition"
-          aria-label="Dismiss anomaly"
-        >
-          <X className="w-4 h-4" />
-        </button>
-      </div>
-
-      <div className="p-4 sm:p-6 space-y-4 sm:space-y-5 flex-1 overflow-y-auto overscroll-contain">
+        <div className="p-4 sm:p-6 space-y-4 sm:space-y-5 flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y">
         {/* Situation (STRICT: Max 2 Short Plain Sentences) */}
         <div className="rounded-xl bg-slate-900/90 border border-slate-800 p-4">
           <p className="text-sm text-slate-200 leading-relaxed font-medium">
@@ -251,14 +218,12 @@ export const StoryEventModal: React.FC<Props> = ({ state, dispatch }) => {
         {/* Tactical Note */}
         <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1">
           <span className="flex items-center gap-1 text-slate-400">
-            <AlertCircle className="w-3.5 h-3.5 text-cyan-400" />
-            🔵 Blue options unlock automatically with ship modules, crew staffing, or Co-Op docking.
-          </span>
-          <span className="font-mono text-slate-400">
-            Press <kbd className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-[10px]">Esc</kbd> to close
+            <AlertCircle className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+            <span>🔵 Blue options unlock automatically with ship modules, crew staffing, or Co-Op docking.</span>
           </span>
         </div>
+        </div>
       </div>
-    </dialog>
+    </div>
   );
 };

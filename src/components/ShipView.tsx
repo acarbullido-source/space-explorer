@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Package, RotateCw, Sparkles, UserCheck, Wrench } from 'lucide-react';
+import { Package, RotateCw, Sparkles, UserCheck, Wrench, ZoomIn, ZoomOut } from 'lucide-react';
 import {
   CHASSIS,
   DIRS,
@@ -62,6 +62,7 @@ export const ShipView: React.FC<Props> = ({
     offsetY: number;
   } | null>(null);
   const [hoveredRoom, setHoveredRoom] = useState<RoomId | null>(null);
+  const [zoomCrew, setZoomCrew] = useState(false);
 
   const activeLayout = editMode ? draftLayout : state.layout;
   const occ = useMemo(() => occupancy(activeLayout), [activeLayout]);
@@ -170,6 +171,25 @@ export const ShipView: React.FC<Props> = ({
   const viewW = (CHASSIS.w + 2) * TILE;
   const viewH = (CHASSIS.h + 4) * TILE;
 
+  // Dynamic tight viewBox around actual ship bounds (or crew zoom) so the ship is large & crisp on mobile
+  const svgViewBox = useMemo(() => {
+    if (editMode) {
+      return `0 0 ${viewW} ${viewH}`;
+    }
+    if (zoomCrew) {
+      const zW = 6.5 * TILE;
+      const zH = 4.4 * TILE;
+      const zX = (crewPos.x + 1.5) * TILE - zW / 2;
+      const zY = (crewPos.y + 1.5) * TILE - zH / 2;
+      return `${zX} ${zY} ${zW} ${zH}`;
+    }
+    const vbX = (bounds.minX + 1 - 1.55) * TILE;
+    const vbY = (bounds.minY + 1 - 1.3) * TILE;
+    const vbW = (bounds.maxX - bounds.minX + 3.1) * TILE;
+    const vbH = (bounds.maxY - bounds.minY + 2.6) * TILE;
+    return `${vbX} ${vbY} ${vbW} ${vbH}`;
+  }, [editMode, zoomCrew, crewPos.x, crewPos.y, bounds, viewW, viewH]);
+
   const engRoom = activeLayout.find((r) => r.id === 'engineering');
   const bridgeRoom = activeLayout.find((r) => r.id === 'bridge');
   const airlockRoom = activeLayout.find((r) => r.id === 'airlock');
@@ -188,8 +208,8 @@ export const ShipView: React.FC<Props> = ({
     >
       <svg
         ref={svgRef}
-        viewBox={`0 0 ${viewW} ${viewH}`}
-        className="w-full h-full max-w-[1180px] max-h-[760px] drop-shadow-[0_18px_45px_rgba(0,0,0,0.85)]"
+        viewBox={svgViewBox}
+        className="w-full h-full max-w-[1180px] max-h-[760px] drop-shadow-[0_18px_45px_rgba(0,0,0,0.85)] transition-all duration-200"
       >
         <defs>
           <radialGradient id="shieldBubble" cx="50%" cy="50%" r="50%">
@@ -215,10 +235,10 @@ export const ShipView: React.FC<Props> = ({
           {(state.encounter.kind === 'garage' || state.encounter.kind === 'shop') && (
             <g className="opacity-70">
               <rect
-                x={-TILE * 0.45}
-                y={-TILE * 0.35}
-                width={(CHASSIS.w + 0.9) * TILE}
-                height={(CHASSIS.h + 0.7) * TILE}
+                x={(bounds.minX - 0.9) * TILE}
+                y={(bounds.minY - 0.65) * TILE}
+                width={(bounds.maxX - bounds.minX + 1.8) * TILE}
+                height={(bounds.maxY - bounds.minY + 1.3) * TILE}
                 rx={28}
                 fill="none"
                 stroke={state.encounter.kind === 'garage' ? '#22d3ee' : '#c084fc'}
@@ -227,11 +247,11 @@ export const ShipView: React.FC<Props> = ({
                 opacity={0.4}
               />
               {/* Orbital clamp arms */}
-              {[2, 6, 10].map((gx) => (
-                <g key={gx}>
+              {[bounds.minX + 1, (bounds.minX + bounds.maxX) / 2 - 0.5, bounds.maxX - 2].map((gx, idx) => (
+                <g key={idx}>
                   <rect
-                    x={gx * TILE + 12}
-                    y={-TILE * 0.35}
+                    x={gx * TILE + 8}
+                    y={(bounds.minY - 0.65) * TILE}
                     width={32}
                     height={12}
                     rx={3}
@@ -240,8 +260,8 @@ export const ShipView: React.FC<Props> = ({
                     strokeWidth={1}
                   />
                   <rect
-                    x={gx * TILE + 12}
-                    y={CHASSIS.h * TILE + TILE * 0.35 - 12}
+                    x={gx * TILE + 8}
+                    y={(bounds.maxY + 0.65) * TILE - 12}
                     width={32}
                     height={12}
                     rx={3}
@@ -927,9 +947,30 @@ export const ShipView: React.FC<Props> = ({
         </g>
       </svg>
 
-      {/* Plain-Language Room Tooltip Banner (Minimal Text, Icon-First) */}
+      {/* Mobile Camera Zoom Toggle (1x Full Ship vs 2x Follow Crew) */}
+      {!editMode && (
+        <button
+          type="button"
+          onClick={() => setZoomCrew((v) => !v)}
+          className="md:hidden absolute bottom-2 right-2 z-20 flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-slate-950/90 border border-slate-700/90 text-[11px] font-bold text-cyan-300 shadow-lg backdrop-blur-md active:scale-95"
+        >
+          {zoomCrew ? (
+            <>
+              <ZoomOut className="w-3.5 h-3.5" />
+              <span>1x Ship</span>
+            </>
+          ) : (
+            <>
+              <ZoomIn className="w-3.5 h-3.5" />
+              <span>2x Crew</span>
+            </>
+          )}
+        </button>
+      )}
+
+      {/* Plain-Language Room Tooltip Banner (Desktop Hover) */}
       {hoveredDef && !editMode && (
-        <div className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-slate-950/90 border border-slate-700/80 shadow-lg backdrop-blur-md">
+        <div className="hidden md:flex pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-slate-950/90 border border-slate-700/80 shadow-lg backdrop-blur-md">
           <hoveredDef.icon className="w-4 h-4 shrink-0" style={{ color: hoveredDef.theme.accent }} />
           <span className="text-xs font-bold text-white">{hoveredDef.name}:</span>
           <span className="text-xs text-slate-300">{hoveredDef.label}</span>

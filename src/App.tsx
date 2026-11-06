@@ -227,14 +227,6 @@ export const App: React.FC = () => {
     }
   }, [editMode, state.crew.cell, state.layout, walkTo]);
 
-  const handleMobileTogglePauseOrFire = useCallback(() => {
-    if (inCombat) {
-      dispatch({ type: 'EXECUTE_COMBAT_TURN' });
-    } else {
-      dispatch({ type: 'PAUSE' });
-    }
-  }, [inCombat]);
-
   // Global Keyboard Controls: WASD, E, M (Sector Map), Spacebar (Execute Turn / Pause), Esc
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -386,7 +378,7 @@ export const App: React.FC = () => {
   const currentRoom = occupancy(state.layout).get(key(state.crew.cell)) ?? null;
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden flex flex-col justify-between text-slate-100 select-none">
+    <div className="relative w-screen h-[100dvh] overflow-hidden flex flex-col justify-between text-slate-100 select-none">
       {/* Animated Parallax Starfield + 5 Biome Backgrounds */}
       <StarfieldCanvas
         sector={state.sector}
@@ -477,7 +469,7 @@ export const App: React.FC = () => {
 
         {/* MOBILE COLLAPSIBLE DRAWER (md:hidden) */}
         {mobileMenuOpen && (
-          <div className="md:hidden px-3.5 py-3 border-t border-slate-800 bg-slate-950/95 space-y-2.5 animate-in slide-in-from-top-2">
+          <div className="md:hidden px-3.5 py-3 border-t border-slate-800 bg-slate-950/95 max-h-[75dvh] overflow-y-auto overscroll-contain touch-pan-y space-y-2.5 shadow-2xl">
             <div className="flex items-center justify-between text-xs">
               {/* Scrap Conversion */}
               <div className="flex items-center gap-2">
@@ -1021,7 +1013,11 @@ export const App: React.FC = () => {
       {/* =================================================================== */}
       {/* 3. BOTTOM HUD: UNIFIED PLASMA PANEL + CONTROL LEGEND + COMBAT/DOCK  */}
       {/* =================================================================== */}
-      <footer className="relative z-20 flex flex-wrap items-end justify-between gap-2.5 px-3.5 pb-2.5 pt-1 pointer-events-none">
+      <footer
+        className={`relative z-20 ${
+          inCombat ? 'flex' : 'hidden md:flex'
+        } flex-wrap items-end justify-between gap-2 px-3 pb-2 pt-1 pointer-events-none`}
+      >
         {/* BOTTOM-LEFT: Unified Plasma Allocation Panel + Compact Control Legend */}
         <div className="pointer-events-auto hidden md:flex flex-wrap items-end gap-2">
           <PlasmaAllocationPanel state={state} dispatch={dispatch} compact />
@@ -1079,11 +1075,14 @@ export const App: React.FC = () => {
 
         {/* BOTTOM-CENTER: EQUIPPED WEAPON CARDS HUD IN COMBAT */}
         {inCombat && (
-          <div className="pointer-events-auto flex justify-center flex-1 max-w-xl mx-auto">
+          <div className="pointer-events-auto flex justify-center w-full flex-1 max-w-xl mx-auto">
             <EquippedWeaponsHUD
               equippedWeapons={state.equippedWeapons}
               selectedSlot={state.selectedWeaponSlot}
-              onSelectSlot={(idx) => dispatch({ type: 'SELECT_WEAPON_SLOT', index: idx })}
+              onSelectSlot={(idx) => {
+                dispatch({ type: 'SELECT_WEAPON_SLOT', index: idx });
+                setMobileCombatView('enemy');
+              }}
               onExecuteTurn={() => dispatch({ type: 'EXECUTE_COMBAT_TURN' })}
               onAutoCloakRetreat={() => dispatch({ type: 'EMERGENCY_AUTO_CLOAK' })}
               plasma={state.plasma}
@@ -1154,16 +1153,24 @@ export const App: React.FC = () => {
         )}
       </footer>
 
-      {/* MOBILE TOUCH CONTROLS (VIRTUAL D-PAD + ACTION BUTTONS) */}
-      {!openModal && !mapOpen && !shopOpen && !coopOpen && !state.activeStoryEvent && (
+      {/* DOCKED MOBILE CONTROL DECK (6-ROOM STRIP + ACTIONS + TOGGLEABLE D-PAD) */}
+      {!editMode && !openModal && !mapOpen && !shopOpen && !coopOpen && !state.activeStoryEvent && (
         <MobileControls
+          state={state}
           inCombat={inCombat}
           currentRoom={currentRoom}
           onMoveDir={handleMobileMoveDir}
           onInteract={handleMobileInteract}
-          onTogglePauseOrFire={handleMobileTogglePauseOrFire}
+          onSelectRoomConsole={handleConsoleClick}
+          onWalkToRoom={(_id, cell) => {
+            setMobileCombatView('player');
+            walkTo(cell, null);
+          }}
+          onTogglePause={() => dispatch({ type: 'PAUSE' })}
+          onStepTurn={() => dispatch({ type: 'TICK' })}
           onOpenMap={() => setMapOpen(true)}
-          paused={state.paused}
+          onTogglePowerDrawer={() => setMobileMenuOpen((v) => !v)}
+          powerDrawerOpen={mobileMenuOpen}
         />
       )}
 
@@ -1177,6 +1184,7 @@ export const App: React.FC = () => {
           const p = state.layout.find((r) => r.id === roomId);
           if (p) walkTo(consoleCell(p), roomId);
         }}
+        onSelectRoom={(roomId) => setOpenModal(roomId)}
         onOpenSectorMap={() => setMapOpen(true)}
         onOpenCoopDocking={() => setCoopOpen(true)}
       />

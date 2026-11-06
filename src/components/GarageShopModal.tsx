@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef, useState } from 'react';
+import React, { useId, useState } from 'react';
 import {
   Activity,
   Check,
@@ -38,44 +38,11 @@ export const GarageShopModal: React.FC<Props> = ({
   onClose,
   onOpenRearrange,
 }) => {
-  const dialogRef = useRef<HTMLDialogElement | null>(null);
   const titleId = useId();
   const [activeTab, setActiveTab] = useState<'upgrades' | 'shop' | 'diplomacy'>('upgrades');
   const [selectedRoomFilter, setSelectedRoomFilter] = useState<RoomId | 'all'>('all');
 
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (open) {
-      if (!dialog.open) dialog.showModal();
-    } else if (dialog.open) {
-      dialog.close();
-    }
-  }, [open]);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (!('closedBy' in HTMLDialogElement.prototype)) {
-      const outside = (e: PointerEvent) => {
-        const r = dialog.getBoundingClientRect();
-        return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
-      };
-      let pressedOutside = false;
-      const onDown = (e: PointerEvent) => {
-        pressedOutside = outside(e);
-      };
-      const onUp = (e: PointerEvent) => {
-        if (pressedOutside && outside(e)) dialog.close();
-      };
-      dialog.addEventListener('pointerdown', onDown);
-      dialog.addEventListener('pointerup', onUp);
-      return () => {
-        dialog.removeEventListener('pointerdown', onDown);
-        dialog.removeEventListener('pointerup', onUp);
-      };
-    }
-  }, []);
+  if (!open) return null;
 
   const translatorLvl = state.moduleLevels.ai_translator ?? 0;
   const translatorUnlocked = translatorLvl >= 1 || state.reputation >= 40;
@@ -86,95 +53,98 @@ export const GarageShopModal: React.FC<Props> = ({
       : UPGRADES_BY_ROOM[selectedRoomFilter];
 
   return (
-    <dialog
-      ref={dialogRef}
-      aria-labelledby={titleId}
-      onClose={onClose}
-      className="backdrop:bg-slate-950/80 backdrop:backdrop-blur-sm bg-slate-950 text-slate-100 rounded-3xl border border-cyan-500/50 p-0 shadow-[0_25px_60px_rgba(0,0,0,0.9)] max-w-4xl w-[94vw] max-h-[90vh] max-h-[90dvh] flex flex-col overflow-hidden overscroll-contain"
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-md"
+      onClick={onClose}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 bg-gradient-to-r from-slate-950 via-cyan-950/40 to-slate-950 border-b border-cyan-500/30 shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-xl bg-cyan-500/20 text-cyan-300 border border-cyan-500/40">
-            <ShoppingBag className="w-5 h-5" />
-          </div>
-          <div>
-            <h2 id={titleId} className="text-base font-extrabold text-white flex items-center gap-2">
-              Orbital Garage & Satellite Trade Hub
-              <span className="text-xs font-mono font-normal text-cyan-300">
-                ({state.encounter.name})
-              </span>
-            </h2>
-            <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs text-slate-400 mt-0.5 font-mono">
-              <span className="text-amber-300">Spendable XP: {state.spendXp}</span>
-              <span className="text-orange-300">Scrap: {state.scrap}</span>
-              <span className="text-cyan-300">Plasma: {state.plasma}/{state.maxPlasma}</span>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onClick={(e) => e.stopPropagation()}
+        className="bg-slate-950 text-slate-100 rounded-2xl sm:rounded-3xl border border-cyan-500/50 p-0 shadow-[0_25px_60px_rgba(0,0,0,0.9)] max-w-4xl w-full max-h-[90dvh] flex flex-col overflow-hidden"
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-3.5 sm:px-6 py-2.5 sm:py-4 bg-gradient-to-r from-slate-950 via-cyan-950/40 to-slate-950 border-b border-cyan-500/30 shrink-0">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <div className="p-2 rounded-xl bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shrink-0">
+              <ShoppingBag className="w-4 h-4 sm:w-5 sm:h-5" />
+            </div>
+            <div className="min-w-0">
+              <h2 id={titleId} className="text-sm sm:text-base font-extrabold text-white truncate">
+                Upgrades & Trade Hub
+              </h2>
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-[11px] sm:text-xs text-slate-400 mt-0.5 font-mono">
+                <span className="text-amber-300">XP: {state.spendXp}</span>
+                <span className="text-orange-300">Scrap: {state.scrap}</span>
+                <span className="text-cyan-300">Plasma: {state.plasma}/{state.maxPlasma}</span>
+              </div>
             </div>
           </div>
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenRearrange();
+              }}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[11px] sm:text-xs font-bold bg-slate-800 hover:bg-slate-700 text-cyan-200 border border-slate-700 transition"
+            >
+              <RotateCw className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Rearrange</span> Rooms
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition"
+              aria-label="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
+
+        {/* Tabs Bar */}
+        <div className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-6 pt-2 border-b border-slate-800 bg-slate-950/60 shrink-0 overflow-x-auto touch-pan-x">
           <button
             type="button"
-            onClick={() => {
-              onClose();
-              onOpenRearrange();
-            }}
-            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-800 hover:bg-slate-700 text-cyan-200 border border-slate-700 transition"
+            onClick={() => setActiveTab('upgrades')}
+            className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 border-b-2 font-bold text-xs shrink-0 transition ${
+              activeTab === 'upgrades'
+                ? 'border-cyan-400 text-cyan-300'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
           >
-            <RotateCw className="w-3.5 h-3.5" /> Rearrange Rooms
+            <Activity className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> 16 Upgrades
           </button>
           <button
             type="button"
-            onClick={onClose}
-            className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition"
-            aria-label="Close"
+            onClick={() => setActiveTab('shop')}
+            className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 border-b-2 font-bold text-xs shrink-0 transition ${
+              activeTab === 'shop'
+                ? 'border-cyan-400 text-cyan-300'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
           >
-            <X className="w-5 h-5" />
+            <ShoppingBag className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Shop Goods
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('diplomacy')}
+            className={`flex items-center gap-1.5 px-3 sm:px-4 py-2 border-b-2 font-bold text-xs shrink-0 transition ${
+              activeTab === 'diplomacy'
+                ? 'border-cyan-400 text-cyan-300'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Globe className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Treaties (5)
+            {state.diplomacy.activeTreaty && (
+              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+            )}
           </button>
         </div>
-      </div>
 
-      {/* Tabs Bar */}
-      <div className="flex items-center gap-2 px-4 sm:px-6 pt-3 border-b border-slate-800 bg-slate-950/60 shrink-0 overflow-x-auto">
-        <button
-          type="button"
-          onClick={() => setActiveTab('upgrades')}
-          className={`flex items-center gap-1.5 px-4 py-2 border-b-2 font-bold text-xs shrink-0 transition ${
-            activeTab === 'upgrades'
-              ? 'border-cyan-400 text-cyan-300'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <Activity className="w-4 h-4" /> 16 Multi-Level Upgrades (Lv 1–5)
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('shop')}
-          className={`flex items-center gap-1.5 px-4 py-2 border-b-2 font-bold text-xs shrink-0 transition ${
-            activeTab === 'shop'
-              ? 'border-cyan-400 text-cyan-300'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <ShoppingBag className="w-4 h-4" /> Satellite Shop Goods
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('diplomacy')}
-          className={`flex items-center gap-1.5 px-4 py-2 border-b-2 font-bold text-xs shrink-0 transition ${
-            activeTab === 'diplomacy'
-              ? 'border-cyan-400 text-cyan-300'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
-          }`}
-        >
-          <Globe className="w-4 h-4" /> Alien Species & Treaties (5)
-          {state.diplomacy.activeTreaty && (
-            <span className="w-2 h-2 rounded-full bg-emerald-400" />
-          )}
-        </button>
-      </div>
-
-      <div className="p-4 sm:p-6 flex-1 overflow-y-auto overscroll-contain space-y-4">
+        <div className="p-3 sm:p-6 flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y space-y-4">
         {/* ============================================================== */}
         {/* TAB 1: 16 MULTI-LEVEL SHIP UPGRADES                            */}
         {/* ============================================================== */}
@@ -476,8 +446,9 @@ export const GarageShopModal: React.FC<Props> = ({
             </div>
           </div>
         )}
+        </div>
       </div>
-    </dialog>
+    </div>
   );
 };
 export default GarageShopModal;
