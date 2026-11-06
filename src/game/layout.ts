@@ -165,12 +165,215 @@ export function computeDock(layout: Layout): DockInfo | null {
   return null;
 }
 
+export interface MothershipDockInfo {
+  dir: Dir;
+  /** Pressurized airlock collar tiles connecting both ships */
+  collar: Cell[];
+  /** Doorway pairs linking player airlock <-> collar <-> partner airlock */
+  collarLinks: [Cell, Cell][];
+  /** Partner's 6-room layout rigidly rotated and shifted into local world space */
+  partnerLayout: Layout;
+  /** Partner ship bounding box in local world space */
+  partnerBounds: { minX: number; minY: number; maxX: number; maxY: number };
+  /** Quarter-turns clockwise applied to partnerBaseLayout */
+  rotSteps: Rot;
+  /** Translation applied after rotation */
+  shift: Cell;
+  /** Map a fractional or integer point from partner's local grid to our world grid */
+  mapPartnerPointToWorld: (pt: { x: number; y: number }) => { x: number; y: number };
+  /** Map an integer cell from partner's local grid to our world grid */
+  mapPartnerCellToWorld: (c: Cell) => Cell;
+  /** Map an integer cell from our world grid back to partner's local grid */
+  mapWorldToPartnerCell: (c: Cell) => Cell;
+}
+
+const OPPOSITE_DIR: Record<Dir, Dir> = {
+  N: 'S',
+  S: 'N',
+  E: 'W',
+  W: 'E',
+};
+
+function rotatePointInChassisCw(
+  pt: { x: number; y: number },
+  rotSteps: Rot,
+): { x: number; y: number } {
+  const cw = CHASSIS.w;
+  const ch = CHASSIS.h;
+  switch (rotSteps) {
+    case 0:
+      return { x: pt.x, y: pt.y };
+    case 1:
+      return { x: ch - 1 - pt.y, y: pt.x };
+    case 2:
+      return { x: cw - 1 - pt.x, y: ch - 1 - pt.y };
+    case 3:
+      return { x: pt.y, y: cw - 1 - pt.x };
+  }
+}
+
+function invRotatePointInChassisCw(
+  pt: { x: number; y: number },
+  rotSteps: Rot,
+): { x: number; y: number } {
+  const cw = CHASSIS.w;
+  const ch = CHASSIS.h;
+  switch (rotSteps) {
+    case 0:
+      return { x: pt.x, y: pt.y };
+    case 1:
+      return { x: pt.y, y: ch - 1 - pt.x };
+    case 2:
+      return { x: cw - 1 - pt.x, y: ch - 1 - pt.y };
+    case 3:
+      return { x: cw - 1 - pt.y, y: pt.x };
+  }
+}
+
+function rotateLayoutInChassisCw(baseLayout: Layout, rotSteps: Rot): Layout {
+  let cur: Layout = baseLayout.map((p) => ({ ...p }));
+  let boxW = CHASSIS.w;
+  let boxH = CHASSIS.h;
+  for (let s = 0; s < rotSteps; s++) {
+    cur = cur.map((p) => {
+      const { h } = dims(p);
+      return {
+        id: p.id,
+        x: boxH - p.y - h,
+        y: p.x,
+        rot: ((p.rot + 1) % 4) as Rot,
+      };
+    });
+    const tmp = boxW;
+    boxW = boxH;
+    boxH = tmp;
+  }
+  return cur;
+}
+
+/**
+ * Merge two full 6-room ship layouts at their Airlock collars with an exact
+ * invertible rigid transformation so both players can walk seamlessly across either ship.
+ */
+export function computeMothershipDock(
+  playerLayout: Layout,
+  partnerBaseLayout: Layout,
+): MothershipDockInfo | null {
+  const a1 = playerLayout.find((r) => r.id === 'airlock');
+  const a2Base = partnerBaseLayout.find((r) => r.id === 'airlock');
+  if (!a1 || !a2Base) return null;
+
+  const h1 = hatchOf(a1);
+  const h2Base = hatchOf(a2Base);
+  if (!h1 || !h2Base || h1.cells.length === 0 || h2Base.cells.length === 0) return null;
+
+  const targetDir = OPPOSITE_DIR[h1.dir];
+  const rotSteps = ((ORDER.indexOf(targetDir) - ORDER.indexOf(h2Base.dir) + 4) % 4) as Rot;
+  const rotatedPartner = rotateLayoutInChassisCw(partnerBaseLayout, rotSteps);
+  const a2Rot = rotatedPartner.find((r) => r.id === 'airlock');
+  if (!a2Rot) return null;
+  const h2Rot = hatchOf(a2Rot);
+  if (!h2Rot || h2Rot.cells.length === 0) return null;
+
+  const occ1 = occupancy(playerLayout);
+  const d1 = DIRS[h1.dir];
+  const pairCount = Math.min(h1.cells.length, h2Rot.cells.length);
+
+  for (let gap = 2; gap <= 6; gap++) {
+    const targetHatch0 = add(h1.cells[0], d1, gap + 1);
+    const shift: Cell = {
+      x: targetHatch0.x - h2Rot.cells[0].x,
+      y: targetHatch0.y - h2Rot.cells[0].y,
+    };
+
+    const partnerLayout: Layout = rotatedPartner.map((p) => ({
+      ...p,
+      x: p.x + shift.x,
+      y: p.y + shift.y,
+    }));
+    const occ2 = occupancy(partnerLayout);
+
+    // Check ship-to-ship overlap
+    let overlap = false;
+    for (const k of occ2.keys()) {
+      if (occ1.has(k)) {
+        overlap = true;
+        break;
+      }
+    }
+    if (overlap) continue;
+
+    const collar: Cell[] = [];
+    const collarLinks: [Cell, Cell][] = [];
+    for (let i = 0; i < pairCount; i++) {
+      const cStart = h1.cells[i];
+      const cEnd: Cell = {
+        x: h2Rot.cells[i].x + shift.x,
+        y: h2Rot.cells[i].y + shift.y,
+      };
+      const lane = Array.from({ length: gap }, (_, s) => add(cStart, d1, s + 1));
+      for (const lc of lane) {
+        if (occ1.has(key(lc)) || occ2.has(key(lc))) {
+          overlap = true;
+          break;
+        }
+        collar.push(lc);
+      }
+      if (overlap) break;
+      collarLinks.push([cStart, lane[0]]);
+      collarLinks.push([lane[lane.length - 1], cEnd]);
+    }
+    if (overlap) continue;
+
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const p of partnerLayout) {
+      const { w, h } = dims(p);
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x + w);
+      maxY = Math.max(maxY, p.y + h);
+    }
+
+    return {
+      dir: h1.dir,
+      collar,
+      collarLinks,
+      partnerLayout,
+      partnerBounds: { minX, minY, maxX, maxY },
+      rotSteps,
+      shift,
+      mapPartnerPointToWorld: (pt) => {
+        const r = rotatePointInChassisCw(pt, rotSteps);
+        return { x: r.x + shift.x, y: r.y + shift.y };
+      },
+      mapPartnerCellToWorld: (c) => {
+        const r = rotatePointInChassisCw(c, rotSteps);
+        return { x: Math.round(r.x + shift.x), y: Math.round(r.y + shift.y) };
+      },
+      mapWorldToPartnerCell: (c) => {
+        const unshifted = { x: c.x - shift.x, y: c.y - shift.y };
+        const l = invRotatePointInChassisCw(unshifted, rotSteps);
+        return { x: Math.round(l.x), y: Math.round(l.y) };
+      },
+    };
+  }
+
+  return null;
+}
+
 export interface Walk {
   roomAt: Map<string, string>;
   doorSet: Set<string>;
 }
 
-export function buildWalk(layout: Layout, dock: DockInfo | null): Walk {
+export function buildWalk(
+  layout: Layout,
+  dock: DockInfo | null,
+  mothershipDock: MothershipDockInfo | null = null,
+): Walk {
   const occ = occupancy(layout);
   const roomAt = new Map<string, string>(occ);
   const doorSet = new Set<string>();
@@ -179,6 +382,23 @@ export function buildWalk(layout: Layout, dock: DockInfo | null): Walk {
     doorSet.add(`${key(b)}|${key(a)}`);
   };
   for (const d of computeDoors(layout, occ)) link(d.a, d.b);
+
+  if (mothershipDock) {
+    const partnerOcc = occupancy(mothershipDock.partnerLayout);
+    for (const [cellKey, rId] of partnerOcc.entries()) {
+      roomAt.set(cellKey, `partner:${rId}`);
+    }
+    for (const d of computeDoors(mothershipDock.partnerLayout, partnerOcc)) {
+      link(d.a, d.b);
+    }
+    for (const c of mothershipDock.collar) {
+      roomAt.set(key(c), 'collar');
+    }
+    for (const [ca, cb] of mothershipDock.collarLinks) {
+      link(ca, cb);
+    }
+  }
+
   if (dock) {
     dock.tube.forEach((c) => roomAt.set(key(c), 'tube'));
     dock.partnerCells.forEach((c) => roomAt.set(key(c), 'partner'));

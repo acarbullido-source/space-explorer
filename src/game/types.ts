@@ -86,6 +86,8 @@ export interface SectorNode {
 export interface WeaponSlot {
   weaponId: WeaponId;
   targetRoomId: string | null;
+  /** Which co-op vessel aimed this weapon ('primary' = P1, 'wingman' = P2) */
+  lockedByRole?: 'primary' | 'wingman';
   /** For Nova Cannon: 0 = uncharged, 1 = charging */
   charged: boolean;
   /** For Thermal Beam: consecutive hits on same target (1, 2, 3) */
@@ -250,6 +252,8 @@ export interface GameState {
   /* Co-Op Mothership Mode */
   mothership: MothershipState;
   partnerCrewPos: { x: number; y: number } | null;
+  partnerCrewCell: Cell | null;
+  partnerCrewFacing: number;
 
   /* 5 Solar System Biomes & 4 Factions */
   biome: BiomeId;

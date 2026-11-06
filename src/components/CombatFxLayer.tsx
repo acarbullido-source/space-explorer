@@ -19,7 +19,11 @@ export const CombatFxLayer: React.FC<Props> = ({
     <div className="pointer-events-none fixed inset-0 z-30 overflow-hidden">
       {/* Projectiles & Beams */}
       {projectiles.length > 0 && (
-        <svg className="w-full h-full pointer-events-none">
+        <svg
+          viewBox="0 0 960 460"
+          preserveAspectRatio="xMidYMid meet"
+          className="w-full h-full pointer-events-none"
+        >
           {projectiles.map((p) => {
             if (p.type === 'beam') {
               return (
@@ -74,11 +78,11 @@ export const CombatFxLayer: React.FC<Props> = ({
         <div
           key={fd.id}
           style={{
-            left: `${fd.x}px`,
-            top: `${fd.y}px`,
+            left: `${Math.min(92, Math.max(8, (fd.x / 960) * 100))}%`,
+            top: `${Math.min(86, Math.max(14, (fd.y / 460) * 100))}%`,
             opacity: fd.alpha,
           }}
-          className="absolute -translate-x-1/2 -translate-y-1/2 font-black text-sm drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] transition-all pointer-events-none select-none tracking-wider"
+          className="absolute -translate-x-1/2 -translate-y-1/2 font-black text-xs sm:text-sm drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] transition-all pointer-events-none select-none tracking-wider"
         >
           <span
             style={{ color: fd.color }}

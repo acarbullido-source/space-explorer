@@ -40,12 +40,18 @@ import { StarfieldCanvas } from './components/StarfieldCanvas';
 import { StoryEventModal } from './components/StoryEventModal';
 import { BIOMES } from './game/biomes';
 import {
+  MothershipRealtimeSession,
+  type CombatExecuteTurnBroadcast,
+  type ShipSystemUpdateBroadcast,
+} from './game/coop';
+import {
   DIRS,
   add,
   buildWalk,
   canStep,
   clampRoom,
   computeDock,
+  computeMothershipDock,
   consoleCell,
   findPath,
   key,
@@ -54,7 +60,7 @@ import {
   same,
   snapAirlock,
   validateLayout,
-} from '../src/game/layout';
+} from './game/layout';
 import { DEFAULT_LAYOUT, ROOMS, ROOM_ORDER } from './game/rooms';
 import {
   CREW_BASE_SPEED,
@@ -65,14 +71,56 @@ import {
   getReputationBadge,
   hostileActive,
   initialState,
+  isRoomManned,
   mannedRoom,
   netPlasmaPerTurn,
   reducer,
   shieldMax,
+  type Action,
 } from './game/state';
-import type { Cell, Dir, Layout, RoomId } from './game/types';
+import type { Cell, Dir, GameState, Layout, PlacedRoom, RoomId } from './game/types';
+import {
+  getOrCreateClientId,
+  getSavedShipName,
+  getSupabaseConfig,
+} from './lib/supabase';
+
+const SHARED_SYSTEM_ACTIONS = new Set<Action['type']>([
+  'SET_POWER',
+  'CONVERT',
+  'REFILL_PLASMA_XP',
+  'ENGINE_MODE',
+  'HEALING',
+  'HAIL',
+  'TRADE',
+  'HELP',
+  'EVA',
+  'RESEARCH',
+  'ANALYZE',
+  'MINE_OBJECT',
+  'POD_ACTION',
+  'COLLECT_ARTIFACT',
+  'LASER_RECHARGE',
+  'ENGAGE_VESSEL',
+  'UPGRADE_MODULE',
+  'REPAIR_ROOM',
+  'SIGN_TREATY',
+  'SWAP_WEAPON',
+  'JUMP',
+  'NEXT_SECTOR',
+  'EMERGENCY_AUTO_CLOAK',
+  'DISMISS_AUTO_CLOAK',
+  'TRIGGER_STORY_EVENT',
+  'CHOOSE_STORY_OPTION',
+  'CLOSE_STORY_EVENT',
+  'CLAIM_ARK_ARTIFACT',
+  'SET_BIOME',
+  'PAUSE',
+  'TICK',
+]);
 
 export const App: React.FC = () => {
+  const clientId = useMemo(() => getOrCreateClientId(), []);
   const [state, dispatch] = useReducer(reducer, 20261105, initialState);
   const [openModal, setOpenModal] = useState<RoomId | null>(null);
   const [mapOpen, setMapOpen] = useState(false);
@@ -93,19 +141,512 @@ export const App: React.FC = () => {
   const [path, setPath] = useState<Cell[]>([]);
   const pendingModalRoom = useRef<RoomId | null>(null);
 
+  // Realtime Multiplayer Session & Sync Refs
+  const sessionRef = useRef<MothershipRealtimeSession | null>(null);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const pathRef = useRef(path);
+  pathRef.current = path;
+  const crewPosRef = useRef(crewPos);
+  crewPosRef.current = crewPos;
+  const crewFacingRef = useRef(crewFacing);
+  crewFacingRef.current = crewFacing;
+  const pendingBroadcastRef = useRef<{
+    kind: 'system' | 'target_lock' | 'combat_turn';
+    reason?: string;
+  } | null>(null);
+  const lastCrewBroadcastAtRef = useRef<number>(0);
+  const lastBroadcastCellKeyRef = useRef<string>('');
+
   const inCombat = hostileActive(state);
+  const isNetworkCoop =
+    state.mothership.active &&
+    state.mothership.mode === 'network_code' &&
+    !!state.mothership.partner &&
+    !state.mothership.partner.isAiWingman;
+
   const dock = useMemo(
-    () =>
-      state.docked || (state.mothership.active && state.mothership.partner)
-        ? computeDock(state.layout)
-        : null,
-    [state.docked, state.mothership.active, state.mothership.partner, state.layout],
+    () => (state.docked ? computeDock(state.layout) : null),
+    [state.docked, state.layout],
   );
-  const walk = useMemo(() => buildWalk(state.layout, dock), [state.layout, dock]);
-  const manned = useMemo(() => mannedRoom(state), [state]);
+  const mothershipDock = useMemo(
+    () =>
+      state.mothership.active && state.mothership.partner
+        ? computeMothershipDock(state.layout, state.mothership.partner.layout)
+        : null,
+    [state.mothership.active, state.mothership.partner, state.layout],
+  );
+  const walk = useMemo(
+    () => buildWalk(state.layout, dock, mothershipDock),
+    [state.layout, dock, mothershipDock],
+  );
   const validation = useMemo(() => validateLayout(draftLayout), [draftLayout]);
 
-  // Keep crew sprite synced if layout resets or saves
+  const buildShipSystemUpdatePayload = useCallback(
+    (s: GameState, reason: string): ShipSystemUpdateBroadcast => {
+      const roomHpByClient: Record<string, Record<RoomId, number>> = {
+        [clientId]: { ...s.roomHp },
+      };
+      if (s.mothership.partner && !s.mothership.partner.isAiWingman) {
+        roomHpByClient[s.mothership.partner.id] = { ...s.mothership.partner.roomHp };
+      }
+      return {
+        senderId: clientId,
+        reason,
+        power: { ...s.power },
+        reactor: s.reactor,
+        plasma: s.plasma,
+        maxPlasma: s.maxPlasma,
+        scrap: s.scrap,
+        rankXp: s.rankXp,
+        spendXp: s.spendXp,
+        reputation: s.reputation,
+        hull: s.hull,
+        maxHull: s.maxHull,
+        shieldLayers: s.shieldLayers,
+        shieldCharge: s.shieldCharge,
+        roomHpByClient,
+        oxygen: s.oxygen,
+        food: s.food,
+        artifacts: s.artifacts,
+        analyzing: s.analyzing,
+        eva: s.eva,
+        engineMode: s.engineMode,
+        healing: s.healing,
+        upgrades: { ...s.upgrades },
+        moduleLevels: { ...s.moduleLevels },
+        equippedWeapons: s.equippedWeapons.map((w) => ({ ...w })),
+        sector: s.sector,
+        current: s.current,
+        nodes: s.nodes,
+        encounter: s.encounter,
+        biome: s.biome,
+        faction: s.faction,
+        flareWarning: s.flareWarning,
+        arkCodex: { ...s.arkCodex },
+        activeStoryEvent: s.activeStoryEvent,
+        storyOutcome: s.storyOutcome,
+        paused: s.paused,
+        turn: s.turn,
+        latestLog: s.log.length > 0 ? s.log[s.log.length - 1] : undefined,
+      };
+    },
+    [clientId],
+  );
+
+  const buildCombatExecuteTurnPayload = useCallback(
+    (s: GameState): CombatExecuteTurnBroadcast => {
+      const roomHpByClient: Record<string, Record<RoomId, number>> = {
+        [clientId]: { ...s.roomHp },
+      };
+      if (s.mothership.partner && !s.mothership.partner.isAiWingman) {
+        roomHpByClient[s.mothership.partner.id] = { ...s.mothership.partner.roomHp };
+      }
+      return {
+        senderId: clientId,
+        turn: s.turn,
+        plasma: s.plasma,
+        maxPlasma: s.maxPlasma,
+        scrap: s.scrap,
+        rankXp: s.rankXp,
+        spendXp: s.spendXp,
+        reputation: s.reputation,
+        hull: s.hull,
+        maxHull: s.maxHull,
+        shieldLayers: s.shieldLayers,
+        shieldCharge: s.shieldCharge,
+        roomHpByClient,
+        equippedWeapons: s.equippedWeapons.map((w) => ({ ...w })),
+        encounter: s.encounter,
+        combatPhase: s.combatPhase,
+        projectiles: s.projectiles,
+        floatingDamages: s.floatingDamages,
+        fx: { ...s.fx },
+        autoCloak: s.autoCloak,
+        log: s.log,
+        logId: s.logId,
+      };
+    },
+    [clientId],
+  );
+
+  /** Connect to `mothership-room-<4-digit-code>` via Supabase Realtime or Local BroadcastChannel */
+  const connectToRoomCode = useCallback(
+    (
+      rawCode: string,
+      transport: 'supabase' | 'broadcast_fallback',
+      shipName: string,
+    ) => {
+      const code = rawCode.replace(/[^0-9]/g, '').padStart(4, '0').slice(0, 4);
+      if (sessionRef.current) {
+        sessionRef.current.destroy();
+        sessionRef.current = null;
+      }
+
+      if (typeof window !== 'undefined') {
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.set('dock', code);
+        window.history.replaceState({}, '', nextUrl.toString());
+      }
+
+      dispatch({
+        type: 'START_NETWORK_MOTHERSHIP',
+        roomCode: code,
+        transport,
+      });
+
+      const cur = stateRef.current;
+      const soloMaxPlasma =
+        200 + cur.upgrades.reactor * 40 + (cur.moduleLevels?.kilopower_reactor ?? 0) * 25;
+      const soloPlasma = cur.mothership.active
+        ? Math.min(soloMaxPlasma, Math.round(cur.plasma * 0.5))
+        : cur.plasma;
+
+      const session = new MothershipRealtimeSession({
+        roomCode: code,
+        clientId,
+        transport,
+        initialPresence: {
+          clientId,
+          shipName: shipName.trim() || 'ISS Horizon',
+          joinedAt: Date.now(),
+          layout: cur.layout,
+          hull: cur.hull,
+          maxHull: cur.maxHull,
+          soloPlasma,
+          soloMaxPlasma,
+          shieldLayers: cur.shieldLayers,
+          roomHp: { ...cur.roomHp },
+          power: { ...cur.power },
+          crewCell: cur.crew.cell,
+          crewFacing: crewFacingRef.current,
+        },
+        callbacks: {
+          onChannelStatus: (status, errorMessage) => {
+            dispatch({ type: 'SET_MOTHERSHIP_STATUS', status, errorMessage });
+          },
+          onPresenceSync: ({ ships, partner, isPrimary }) => {
+            const wasDockedWithPartner =
+              stateRef.current.mothership.active &&
+              stateRef.current.mothership.partner?.id === partner?.clientId;
+
+            if (partner && !wasDockedWithPartner && isPrimary) {
+              pendingBroadcastRef.current = {
+                kind: 'system',
+                reason: 'initial_dock_sync',
+              };
+            }
+
+            dispatch({
+              type: 'SYNC_PRESENCE_MOTHERSHIP',
+              ships,
+              partner,
+              isPrimary,
+            });
+
+            if (partner && !wasDockedWithPartner) {
+              // Broadcast exact initial crew sub-tile coordinates & Primary state snapshot
+              window.setTimeout(() => {
+                const liveSession = sessionRef.current;
+                const liveState = stateRef.current;
+                if (!liveSession || !liveState.mothership.active) return;
+
+                liveSession.sendCrewMove({
+                  senderId: clientId,
+                  shipName: getSavedShipName(),
+                  pos: { ...crewPosRef.current },
+                  cell: liveState.crew.cell,
+                  facing: crewFacingRef.current,
+                  roomId: occupancy(liveState.layout).get(key(liveState.crew.cell)) ?? null,
+                  mannedRoomId: mannedRoom(liveState),
+                });
+
+                if (liveState.mothership.primaryShip === 'player') {
+                  liveSession.sendShipSystemUpdate(
+                    buildShipSystemUpdatePayload(liveState, 'initial_dock_handshake'),
+                  );
+                }
+              }, 220);
+            }
+          },
+          onPartnerLeft: () => {
+            setPath([]);
+            pendingModalRoom.current = null;
+            dispatch({ type: 'UNDOCK_MOTHERSHIP', reason: 'partner_left' });
+          },
+          onRemoteUndock: (payload) => {
+            if (sessionRef.current) {
+              sessionRef.current.destroy();
+              sessionRef.current = null;
+            }
+            setPath([]);
+            pendingModalRoom.current = null;
+            dispatch({
+              type: 'UNDOCK_MOTHERSHIP',
+              reason: 'partner_left',
+              sharedPlasmaSnapshot: payload.sharedPlasmaSnapshot,
+            });
+          },
+          onCrewMove: (payload) => {
+            const liveState = stateRef.current;
+            const partnerLayout = liveState.mothership.partner?.layout;
+            const mDock = partnerLayout
+              ? computeMothershipDock(liveState.layout, partnerLayout)
+              : null;
+            const worldPos = mDock
+              ? mDock.mapPartnerPointToWorld(payload.pos)
+              : payload.pos;
+            const worldCell = mDock
+              ? mDock.mapPartnerCellToWorld(payload.cell)
+              : payload.cell;
+            const worldFacing = mDock
+              ? (payload.facing + mDock.rotSteps) % 4
+              : payload.facing;
+
+            dispatch({
+              type: 'PARTNER_CREW_MOVED',
+              pos: worldPos,
+              cell: worldCell,
+              facing: worldFacing,
+            });
+          },
+          onShipSystemUpdate: (payload) => {
+            dispatch({
+              type: 'APPLY_SHIP_SYSTEM_UPDATE',
+              payload,
+              myClientId: clientId,
+            });
+          },
+          onCombatTargetLock: (payload) => {
+            dispatch({
+              type: 'APPLY_COMBAT_TARGET_LOCK',
+              payload,
+            });
+          },
+          onCombatExecuteTurn: (payload) => {
+            dispatch({
+              type: 'APPLY_COMBAT_EXECUTE_TURN',
+              payload,
+              myClientId: clientId,
+            });
+          },
+        },
+      });
+
+      sessionRef.current = session;
+    },
+    [clientId, buildShipSystemUpdatePayload],
+  );
+
+  /** Cleanly undock from either Network Co-Op or Local AI Wingman */
+  const handleRequestUndock = useCallback(() => {
+    const cur = stateRef.current;
+    if (sessionRef.current) {
+      if (cur.mothership.active) {
+        sessionRef.current.sendUndock({
+          senderId: clientId,
+          sharedPlasmaSnapshot: cur.plasma,
+        });
+      }
+      sessionRef.current.destroy();
+      sessionRef.current = null;
+    }
+
+    if (typeof window !== 'undefined') {
+      const nextUrl = new URL(window.location.href);
+      if (nextUrl.searchParams.has('dock')) {
+        nextUrl.searchParams.delete('dock');
+        window.history.replaceState({}, '', nextUrl.toString());
+      }
+    }
+
+    setPath([]);
+    pendingModalRoom.current = null;
+    dispatch({ type: 'UNDOCK_MOTHERSHIP', reason: 'manual' });
+  }, [clientId]);
+
+  /** Tear down Realtime subscription on unmount */
+  useEffect(() => {
+    return () => {
+      if (sessionRef.current) {
+        sessionRef.current.destroy();
+        sessionRef.current = null;
+      }
+    };
+  }, []);
+
+  /** Auto-join `?dock=XXXX` URL param or show one-time Supabase/Local Setup Modal if env vars aren't set */
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const dockParam = params.get('dock');
+    const supaCfg = getSupabaseConfig();
+
+    if (dockParam && /^\d{4}$/.test(dockParam)) {
+      if (supaCfg.isConfigured) {
+        connectToRoomCode(dockParam, 'supabase', getSavedShipName());
+        setCoopOpen(true);
+      } else {
+        setCoopOpen(true);
+      }
+      return;
+    }
+
+    if (!supaCfg.isConfigured) {
+      const dismissed = window.sessionStorage.getItem('space_explorer_setup_dismissed');
+      if (dismissed !== '1') {
+        window.sessionStorage.setItem('space_explorer_setup_dismissed', '1');
+        setCoopOpen(true);
+      }
+    }
+  }, [connectToRoomCode]);
+
+  /** Wrapped dispatch that queues Simultaneous Realtime Broadcast events on local actions */
+  const playerDispatch = useCallback((action: Action) => {
+    const cur = stateRef.current;
+    const netCoop =
+      cur.mothership.active &&
+      cur.mothership.mode === 'network_code' &&
+      !!cur.mothership.partner &&
+      !cur.mothership.partner.isAiWingman;
+
+    if (netCoop) {
+      if (action.type === 'EXECUTE_COMBAT_TURN') {
+        if (cur.mothership.primaryShip === 'player') {
+          pendingBroadcastRef.current = { kind: 'combat_turn' };
+          dispatch(action);
+        } else {
+          pendingBroadcastRef.current = { kind: 'target_lock' };
+          dispatch({ type: 'SET_COMBAT_READY' });
+        }
+        return;
+      }
+
+      if (action.type === 'SET_WEAPON_TARGET' || action.type === 'SET_COMBAT_READY') {
+        pendingBroadcastRef.current = { kind: 'target_lock' };
+        dispatch(action);
+        return;
+      }
+
+      if (SHARED_SYSTEM_ACTIONS.has(action.type)) {
+        pendingBroadcastRef.current = { kind: 'system', reason: action.type };
+        dispatch(action);
+        return;
+      }
+    }
+
+    dispatch(action);
+  }, []);
+
+  /** Effect A: Flush queued `SHIP_SYSTEM_UPDATE`, `COMBAT_TARGET_LOCK`, or `COMBAT_EXECUTE_TURN` */
+  useEffect(() => {
+    const pending = pendingBroadcastRef.current;
+    if (!pending) return;
+    pendingBroadcastRef.current = null;
+
+    const session = sessionRef.current;
+    if (!session || !isNetworkCoop) return;
+
+    if (pending.kind === 'system') {
+      session.sendShipSystemUpdate(
+        buildShipSystemUpdatePayload(state, pending.reason ?? 'update'),
+      );
+    } else if (pending.kind === 'target_lock') {
+      const myRole: 'primary' | 'wingman' =
+        state.mothership.primaryShip === 'player' ? 'primary' : 'wingman';
+      const focusRoomId =
+        myRole === 'primary'
+          ? state.mothership.primaryTargetRoomId
+          : state.mothership.wingmanTargetRoomId;
+      session.sendCombatTargetLock({
+        senderId: clientId,
+        senderRole: myRole,
+        equippedWeapons: state.equippedWeapons,
+        focusRoomId,
+        ready: state.mothership.localCombatReady,
+      });
+    } else if (pending.kind === 'combat_turn') {
+      session.sendCombatExecuteTurn(buildCombatExecuteTurnPayload(state));
+    }
+  }, [
+    state,
+    isNetworkCoop,
+    clientId,
+    buildShipSystemUpdatePayload,
+    buildCombatExecuteTurnPayload,
+  ]);
+
+  /** Effect B: When BOTH players mark Ready in combat, Primary Control Ship resolves & broadcasts turn */
+  useEffect(() => {
+    if (
+      isNetworkCoop &&
+      inCombat &&
+      state.mothership.primaryShip === 'player' &&
+      state.mothership.localCombatReady &&
+      state.mothership.partnerCombatReady
+    ) {
+      pendingBroadcastRef.current = { kind: 'combat_turn' };
+      dispatch({ type: 'EXECUTE_COMBAT_TURN' });
+    }
+  }, [
+    isNetworkCoop,
+    inCombat,
+    state.mothership.primaryShip,
+    state.mothership.localCombatReady,
+    state.mothership.partnerCombatReady,
+  ]);
+
+  /** Broadcast live `CREW_MOVE` updates (immediate on discrete tile/console step, ~45ms throttled sub-tile) */
+  useEffect(() => {
+    const session = sessionRef.current;
+    if (!session || !isNetworkCoop) return;
+
+    const now = performance.now();
+    const cellKey = `${state.crew.cell.x},${state.crew.cell.y},${crewFacing}`;
+    const discreteChanged = cellKey !== lastBroadcastCellKeyRef.current;
+
+    if (!discreteChanged && now - lastCrewBroadcastAtRef.current < 45) {
+      return;
+    }
+
+    lastCrewBroadcastAtRef.current = now;
+    if (discreteChanged) {
+      lastBroadcastCellKeyRef.current = cellKey;
+      session.updateSelfPresence({
+        crewCell: state.crew.cell,
+        crewFacing,
+      });
+    }
+
+    let currentRoomId: string | null =
+      occupancy(state.layout).get(key(state.crew.cell)) ?? null;
+    if (!currentRoomId && mothershipDock) {
+      currentRoomId =
+        occupancy(mothershipDock.partnerLayout).get(key(state.crew.cell)) ??
+        (mothershipDock.collar.some((c) => same(c, state.crew.cell)) ? 'collar' : null);
+    }
+
+    session.sendCrewMove({
+      senderId: clientId,
+      shipName: getSavedShipName(),
+      pos: { x: crewPos.x, y: crewPos.y },
+      cell: state.crew.cell,
+      facing: crewFacing,
+      roomId: currentRoomId,
+      mannedRoomId: mannedRoom(state),
+    });
+  }, [crewPos, state, crewFacing, isNetworkCoop, clientId, mothershipDock]);
+
+  /** Clear combat projectiles & floating damage numbers cleanly after volley animation */
+  useEffect(() => {
+    if (state.projectiles.length === 0 && state.floatingDamages.length === 0) return;
+    const timer = window.setTimeout(() => {
+      dispatch({ type: 'CLEAR_COMBAT_FX' });
+    }, 1150);
+    return () => window.clearTimeout(timer);
+  }, [state.projectiles, state.floatingDamages]);
+
+  // Keep crew sprite synced if layout resets, undocks, or saves
   useEffect(() => {
     if (path.length === 0) {
       setCrewPos({ x: state.crew.cell.x, y: state.crew.cell.y });
@@ -113,20 +654,25 @@ export const App: React.FC = () => {
   }, [state.crew.cell, path.length]);
 
   // Real-time Turn Ticker when not paused or in Edit Mode or Combat
+  // In Network Co-Op, Primary Control Ship drives the peaceful turn clock and syncs via SHIP_SYSTEM_UPDATE
   useEffect(() => {
     if (state.paused || editMode || state.gameOver || inCombat) return;
+    if (isNetworkCoop && state.mothership.primaryShip !== 'player') return;
     const id = window.setInterval(() => {
-      dispatch({ type: 'TICK' });
+      playerDispatch({ type: 'TICK' });
     }, TURN_MS);
     return () => window.clearInterval(id);
-  }, [state.paused, editMode, state.gameOver, inCombat]);
+  }, [
+    state.paused,
+    editMode,
+    state.gameOver,
+    inCombat,
+    isNetworkCoop,
+    state.mothership.primaryShip,
+    playerDispatch,
+  ]);
 
   // Smooth Crew Walking Animation Loop
-  const stateRef = useRef(state);
-  stateRef.current = state;
-  const pathRef = useRef(path);
-  pathRef.current = path;
-
   useEffect(() => {
     let raf = 0;
     let last = performance.now();
@@ -168,6 +714,25 @@ export const App: React.FC = () => {
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
   }, []);
+
+  const findRoomAtCell = useCallback(
+    (cell: Cell): { roomId: RoomId; piece: PlacedRoom } | null => {
+      const ownId = occupancy(state.layout).get(key(cell));
+      if (ownId) {
+        const piece = state.layout.find((r) => r.id === ownId)!;
+        return { roomId: ownId, piece };
+      }
+      if (mothershipDock) {
+        const partnerId = occupancy(mothershipDock.partnerLayout).get(key(cell));
+        if (partnerId) {
+          const piece = mothershipDock.partnerLayout.find((r) => r.id === partnerId)!;
+          return { roomId: partnerId, piece };
+        }
+      }
+      return null;
+    },
+    [state.layout, mothershipDock],
+  );
 
   const walkTo = useCallback(
     (dest: Cell, openRoomWhenDone: RoomId | null = null) => {
@@ -214,18 +779,17 @@ export const App: React.FC = () => {
 
   const handleMobileInteract = useCallback(() => {
     if (editMode) return;
-    const occRoom = occupancy(state.layout).get(key(state.crew.cell));
-    if (occRoom) {
-      const p = state.layout.find((r) => r.id === occRoom)!;
-      const cCell = consoleCell(p);
+    const hit = findRoomAtCell(state.crew.cell);
+    if (hit) {
+      const cCell = consoleCell(hit.piece);
       if (!same(state.crew.cell, cCell)) {
-        walkTo(cCell, occRoom);
+        walkTo(cCell, hit.roomId);
       }
-      setOpenModal(occRoom);
+      setOpenModal(hit.roomId);
     } else {
       setOpenModal('bridge');
     }
-  }, [editMode, state.crew.cell, state.layout, walkTo]);
+  }, [editMode, state.crew.cell, findRoomAtCell, walkTo]);
 
   // Global Keyboard Controls: WASD, E, M (Sector Map), Spacebar (Execute Turn / Pause), Esc
   useEffect(() => {
@@ -268,9 +832,9 @@ export const App: React.FC = () => {
       if (e.code === 'Space' && !openModal && !mapOpen && !shopOpen && !coopOpen && !editMode) {
         e.preventDefault();
         if (inCombat) {
-          dispatch({ type: 'EXECUTE_COMBAT_TURN' });
+          playerDispatch({ type: 'EXECUTE_COMBAT_TURN' });
         } else {
-          dispatch({ type: 'PAUSE' });
+          playerDispatch({ type: 'PAUSE' });
         }
         return;
       }
@@ -333,23 +897,38 @@ export const App: React.FC = () => {
 
       if (e.code === 'KeyE') {
         e.preventDefault();
-        const occRoom = occupancy(state.layout).get(key(state.crew.cell));
-        if (occRoom) {
-          const p = state.layout.find((r) => r.id === occRoom)!;
-          const cCell = consoleCell(p);
+        const hit = findRoomAtCell(state.crew.cell);
+        if (hit) {
+          const cCell = consoleCell(hit.piece);
           if (!same(state.crew.cell, cCell)) {
-            walkTo(cCell, occRoom);
+            walkTo(cCell, hit.roomId);
           }
-          setOpenModal(occRoom);
+          setOpenModal(hit.roomId);
         }
       }
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [openModal, mapOpen, editMode, selectedRoom, state.crew.cell, state.layout, walk, walkTo, inCombat]);
+  }, [
+    openModal,
+    mapOpen,
+    shopOpen,
+    coopOpen,
+    editMode,
+    selectedRoom,
+    state.crew.cell,
+    walk,
+    walkTo,
+    inCombat,
+    findRoomAtCell,
+    playerDispatch,
+  ]);
+
+  const canRearrange = canEditLayout(state) && !state.mothership.active;
 
   const enterEditMode = () => {
+    if (state.mothership.active) return;
     setOpenModal(null);
     setMapOpen(false);
     setPath([]);
@@ -375,7 +954,7 @@ export const App: React.FC = () => {
   const rankInfo = getRank(state.rankXp);
   const repBadge = getReputationBadge(state.reputation);
   const repSliderPct = Math.round(((state.reputation + 100) / 200) * 100);
-  const currentRoom = occupancy(state.layout).get(key(state.crew.cell)) ?? null;
+  const currentRoom = findRoomAtCell(state.crew.cell)?.roomId ?? null;
 
   return (
     <div className="relative w-screen h-[100dvh] overflow-hidden flex flex-col justify-between text-slate-100 select-none">
@@ -395,7 +974,7 @@ export const App: React.FC = () => {
         projectiles={state.projectiles}
         floatingDamages={state.floatingDamages}
         autoCloak={state.autoCloak}
-        onDismissAutoCloak={() => dispatch({ type: 'DISMISS_AUTO_CLOAK' })}
+        onDismissAutoCloak={() => playerDispatch({ type: 'DISMISS_AUTO_CLOAK' })}
       />
 
       {/* =================================================================== */}
@@ -417,7 +996,9 @@ export const App: React.FC = () => {
             {/* Shields */}
             <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-mono font-bold text-sky-300">
               <Shield className="w-3 h-3 text-sky-400 shrink-0" />
-              <span>{state.shieldLayers}/{shieldMax(state)}</span>
+              <span>
+                {state.shieldLayers}/{shieldMax(state)}
+              </span>
             </div>
 
             {/* Plasma */}
@@ -450,7 +1031,11 @@ export const App: React.FC = () => {
             <button
               type="button"
               onClick={() => setCoopOpen(true)}
-              className="p-1.5 rounded-lg bg-purple-500/20 text-purple-300 border border-purple-500/50"
+              className={`p-1.5 rounded-lg border ${
+                state.mothership.active
+                  ? 'bg-emerald-500/25 text-emerald-300 border-emerald-400/60'
+                  : 'bg-purple-500/20 text-purple-300 border-purple-500/50'
+              }`}
               aria-label="Co-Op Mothership"
               title="Co-Op Docking"
             >
@@ -477,7 +1062,7 @@ export const App: React.FC = () => {
                 <button
                   type="button"
                   disabled={state.scrap < convertScrapCost(state) || state.plasma >= state.maxPlasma}
-                  onClick={() => dispatch({ type: 'CONVERT' })}
+                  onClick={() => playerDispatch({ type: 'CONVERT' })}
                   className="px-2 py-0.5 rounded text-[10px] font-extrabold bg-amber-400/20 text-amber-200 border border-amber-400/50"
                 >
                   +Plasma
@@ -497,7 +1082,9 @@ export const App: React.FC = () => {
                 <span className="font-bold text-white">{rankInfo.current.title}</span>
                 <span className="text-[10px] text-slate-400">({state.rankXp} XP)</span>
               </div>
-              <span className={`px-2 py-0.5 rounded text-[10px] font-extrabold border ${repBadge.bg} ${repBadge.color}`}>
+              <span
+                className={`px-2 py-0.5 rounded text-[10px] font-extrabold border ${repBadge.bg} ${repBadge.color}`}
+              >
                 {repBadge.label} ({state.reputation})
               </span>
             </div>
@@ -508,11 +1095,16 @@ export const App: React.FC = () => {
               return (
                 <div
                   className="p-2 rounded-xl border text-xs flex items-center justify-between"
-                  style={{ backgroundColor: `${bDef.primaryColor}15`, borderColor: `${bDef.primaryColor}50` }}
+                  style={{
+                    backgroundColor: `${bDef.primaryColor}15`,
+                    borderColor: `${bDef.primaryColor}50`,
+                  }}
                 >
                   <div className="flex items-center gap-2">
                     <Globe className="w-3.5 h-3.5 shrink-0" style={{ color: bDef.primaryColor }} />
-                    <span className="font-bold text-white truncate max-w-[220px]">{bDef.name}: {bDef.rule}</span>
+                    <span className="font-bold text-white truncate max-w-[220px]">
+                      {bDef.name}: {bDef.rule}
+                    </span>
                   </div>
                   {state.flareWarning && (
                     <span className="px-1.5 py-0.2 rounded font-black text-[9px] bg-red-500 text-white animate-pulse">
@@ -524,9 +1116,9 @@ export const App: React.FC = () => {
             })()}
 
             {/* Plasma Allocation inside Mobile Drawer */}
-            <PlasmaAllocationPanel state={state} dispatch={dispatch} compact />
+            <PlasmaAllocationPanel state={state} dispatch={playerDispatch} compact />
 
-            {canEditLayout(state) && !editMode && (
+            {canRearrange && !editMode && (
               <button
                 type="button"
                 onClick={() => {
@@ -544,7 +1136,7 @@ export const App: React.FC = () => {
         {/* DESKTOP FULL TOP ROW (hidden md:flex) */}
         <div className="hidden md:flex flex-wrap items-center justify-between gap-2 px-3.5 py-2">
           <div className="flex flex-wrap items-center gap-2">
-            {/* WIDGET 1: Hull Integrity (Segmented green/yellow/red armor bar 0-100%) */}
+            {/* WIDGET 1: Hull Integrity */}
             <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800">
               <Wrench className="w-4 h-4 text-emerald-400 shrink-0" />
               <div>
@@ -565,7 +1157,7 @@ export const App: React.FC = () => {
               </div>
             </div>
 
-            {/* WIDGET 2: Magnetic Shields (Blue bubble pips that recharge each turn) */}
+            {/* WIDGET 2: Magnetic Shields */}
             <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800">
               <Shield className="w-4 h-4 text-sky-400 shrink-0" />
               <div>
@@ -593,7 +1185,7 @@ export const App: React.FC = () => {
               </div>
             </div>
 
-            {/* WIDGET 3: Plasma Reserve (The Universal Resource + net/turn indicator) */}
+            {/* WIDGET 3: Plasma Reserve */}
             <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-cyan-500/40 shadow-[0_0_15px_rgba(34,211,238,0.12)]">
               <Zap className="w-4 h-4 text-cyan-400 shrink-0" />
               <div className="min-w-[165px]">
@@ -615,17 +1207,19 @@ export const App: React.FC = () => {
               </div>
             </div>
 
-            {/* WIDGET 4: Scrap Cargo (Wrench icon + quick convert into Plasma) */}
+            {/* WIDGET 4: Scrap Cargo */}
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800">
               <Wrench className="w-4 h-4 text-amber-400 shrink-0" />
               <div>
                 <div className="text-[10px] font-bold uppercase text-slate-400">Scrap Cargo</div>
                 <div className="flex items-center gap-2 mt-0.5">
-                  <span className="text-sm font-extrabold font-mono text-amber-300">{state.scrap}</span>
+                  <span className="text-sm font-extrabold font-mono text-amber-300">
+                    {state.scrap}
+                  </span>
                   <button
                     type="button"
                     disabled={state.scrap < convertScrapCost(state) || state.plasma >= state.maxPlasma}
-                    onClick={() => dispatch({ type: 'CONVERT' })}
+                    onClick={() => playerDispatch({ type: 'CONVERT' })}
                     title={`Convert ${convertScrapCost(state)} Scrap into +30 Plasma`}
                     className="px-1.5 py-0.5 rounded text-[10px] font-extrabold bg-amber-400/20 hover:bg-amber-400/35 disabled:opacity-35 text-amber-200 border border-amber-400/50"
                   >
@@ -635,9 +1229,8 @@ export const App: React.FC = () => {
               </div>
             </div>
 
-            {/* WIDGET 5: Dual-XP (Rank XP + Spendable XP) & Sector Reputation Slider */}
+            {/* WIDGET 5: Dual-XP & Sector Reputation Slider */}
             <div className="flex items-center gap-3 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800">
-              {/* Rank XP (Lifetime) */}
               <div title={`Narrative Rank Perk: ${rankInfo.current.perk}`}>
                 <div className="flex items-center gap-1 text-[10px] font-bold">
                   <Star className="w-3.5 h-3.5 text-amber-300" />
@@ -652,7 +1245,6 @@ export const App: React.FC = () => {
                 </div>
               </div>
 
-              {/* Spendable XP (Currency) */}
               <div
                 className="flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-400/40"
                 title="Spendable XP — buy upgrades, trade, or refill Plasma"
@@ -664,10 +1256,14 @@ export const App: React.FC = () => {
                 </div>
               </div>
 
-              {/* System Reputation Meter (-100 Outlaw to +100 Trusted Ally) */}
-              <div className="min-w-[125px]" title="Sector Reputation (−100 Outlaw to +100 Trusted Ally)">
+              <div
+                className="min-w-[125px]"
+                title="Sector Reputation (−100 Outlaw to +100 Trusted Ally)"
+              >
                 <div className="flex items-center justify-between gap-1.5 text-[10px]">
-                  <span className={`px-1.5 py-0.2 rounded border font-extrabold ${repBadge.bg} ${repBadge.color}`}>
+                  <span
+                    className={`px-1.5 py-0.2 rounded border font-extrabold ${repBadge.bg} ${repBadge.color}`}
+                  >
                     {repBadge.label}
                   </span>
                   <span className="font-mono text-slate-300">
@@ -728,14 +1324,23 @@ export const App: React.FC = () => {
               onClick={() => setCoopOpen(true)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-extrabold border transition ${
                 state.mothership.active
-                  ? 'bg-cyan-500/25 border-cyan-400 text-cyan-200 shadow-[0_0_14px_rgba(34,211,238,0.35)]'
-                  : 'bg-slate-900 border-slate-700 hover:border-slate-500 text-slate-200'
+                  ? 'bg-emerald-500/25 border-emerald-400 text-emerald-200 shadow-[0_0_14px_rgba(16,185,129,0.35)]'
+                  : state.mothership.channelStatus === 'waiting_partner'
+                    ? 'bg-purple-500/25 border-purple-400 text-purple-200 animate-pulse'
+                    : 'bg-slate-900 border-slate-700 hover:border-slate-500 text-slate-200'
               }`}
-              title="Co-Op Ship Docking: Merge fleet, pool Plasma reserves, share shields & walk between decks"
+              title="Co-Op Ship Docking: Link via 4-digit code or AI Wingman"
             >
               <Users className="w-3.5 h-3.5 text-cyan-400" />
               {state.mothership.active ? (
-                <span>Mothership ({state.plasma}P)</span>
+                <span>
+                  Mothership{' '}
+                  {state.mothership.mode === 'network_code'
+                    ? `#${state.mothership.roomCode}`
+                    : `(${state.plasma}P)`}
+                </span>
+              ) : state.mothership.channelStatus === 'waiting_partner' ? (
+                <span>Waiting #{state.mothership.roomCode}…</span>
               ) : (
                 <span>Co-Op Dock</span>
               )}
@@ -761,7 +1366,7 @@ export const App: React.FC = () => {
               Sector Map (M)
             </button>
 
-            {canEditLayout(state) && !editMode && (
+            {canRearrange && !editMode && (
               <button
                 type="button"
                 onClick={enterEditMode}
@@ -775,7 +1380,7 @@ export const App: React.FC = () => {
             {!inCombat && (
               <button
                 type="button"
-                onClick={() => dispatch({ type: 'PAUSE' })}
+                onClick={() => playerDispatch({ type: 'PAUSE' })}
                 className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-extrabold border transition ${
                   state.paused
                     ? 'bg-amber-400 text-slate-950 border-amber-300'
@@ -790,7 +1395,7 @@ export const App: React.FC = () => {
             {!inCombat && (
               <button
                 type="button"
-                onClick={() => dispatch({ type: 'TICK' })}
+                onClick={() => playerDispatch({ type: 'TICK' })}
                 className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-bold bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700"
                 title="Advance 1 Turn"
               >
@@ -818,12 +1423,12 @@ export const App: React.FC = () => {
           <SpaceViewportObjects
             state={state}
             editMode={editMode}
-            dispatch={dispatch}
+            dispatch={playerDispatch}
             onOpenRoomModal={(room) => setOpenModal(room)}
           />
         )}
 
-        {/* Normal Freeflight Single Ship View */}
+        {/* Normal Freeflight Ship View (or Merged 12-Room Mothership View) */}
         {!inCombat && (
           <ShipView
             state={state}
@@ -877,14 +1482,16 @@ export const App: React.FC = () => {
             </div>
 
             <div className="w-full flex-1 flex flex-col lg:flex-row items-center justify-between gap-4 overflow-hidden">
-              {/* Left: Player Ship Cutaway */}
+              {/* Left: Player / Merged Mothership Cutaway */}
               <div
                 className={`flex-1 w-full h-full flex-col items-center justify-center relative ${
                   mobileCombatView === 'enemy' ? 'hidden lg:flex' : 'flex'
                 }`}
               >
-                <div className="absolute top-1 left-2 text-[10px] font-extrabold uppercase tracking-wider text-cyan-300 bg-slate-950/80 px-2 py-0.5 rounded border border-cyan-500/40">
-                  Your Vessel (Click Rooms to Man)
+                <div className="absolute top-1 left-2 z-10 text-[10px] font-extrabold uppercase tracking-wider text-cyan-300 bg-slate-950/80 px-2 py-0.5 rounded border border-cyan-500/40">
+                  {state.mothership.active
+                    ? 'Docked Mothership (Click Any Room to Man +25%)'
+                    : 'Your Vessel (Click Rooms to Man)'}
                 </div>
                 <ShipView
                   state={state}
@@ -917,7 +1524,7 @@ export const App: React.FC = () => {
                 </span>
               </div>
 
-              {/* Right: Enemy Ship Cutaway & Targetable Rooms */}
+              {/* Right: Enemy Ship Cutaway & Dual Co-Op Targetable Rooms */}
               <div
                 className={`flex-1 w-full h-full flex-col items-center justify-center relative ${
                   mobileCombatView === 'player' ? 'hidden lg:flex' : 'flex'
@@ -927,10 +1534,15 @@ export const App: React.FC = () => {
                   enemy={state.encounter.enemy}
                   equippedWeapons={state.equippedWeapons}
                   selectedWeaponSlot={state.selectedWeaponSlot}
-                  targetRoomId={state.equippedWeapons[state.selectedWeaponSlot ?? 0]?.targetRoomId ?? null}
+                  targetRoomId={
+                    state.equippedWeapons[state.selectedWeaponSlot ?? 0]?.targetRoomId ?? null
+                  }
+                  coopActive={state.mothership.active}
+                  primaryTargetRoomId={state.mothership.primaryTargetRoomId}
+                  wingmanTargetRoomId={state.mothership.wingmanTargetRoomId}
                   onTargetRoom={(roomId) => {
                     const slotIdx = state.selectedWeaponSlot ?? 0;
-                    dispatch({
+                    playerDispatch({
                       type: 'SET_WEAPON_TARGET',
                       slotIndex: slotIdx,
                       targetRoomId: roomId,
@@ -1020,7 +1632,7 @@ export const App: React.FC = () => {
       >
         {/* BOTTOM-LEFT: Unified Plasma Allocation Panel + Compact Control Legend */}
         <div className="pointer-events-auto hidden md:flex flex-wrap items-end gap-2">
-          <PlasmaAllocationPanel state={state} dispatch={dispatch} compact />
+          <PlasmaAllocationPanel state={state} dispatch={playerDispatch} compact />
 
           <div className="hidden sm:block rounded-2xl bg-slate-950/90 border border-slate-800/90 px-3 py-2 shadow-xl backdrop-blur-md space-y-0.5 text-[10px]">
             <div className="font-extrabold uppercase tracking-wider text-cyan-300 mb-0.5">
@@ -1041,7 +1653,11 @@ export const App: React.FC = () => {
                   <kbd className="px-1 py-0.2 rounded bg-slate-800 border border-slate-700 font-mono text-white">
                     Space
                   </kbd>{' '}
-                  <strong className="text-amber-300">Execute Turn</strong>
+                  <strong className="text-amber-300">
+                    {isNetworkCoop && state.mothership.primaryShip !== 'player'
+                      ? 'Toggle Ready'
+                      : 'Execute Turn'}
+                  </strong>
                 </div>
               </>
             ) : (
@@ -1083,11 +1699,16 @@ export const App: React.FC = () => {
                 dispatch({ type: 'SELECT_WEAPON_SLOT', index: idx });
                 setMobileCombatView('enemy');
               }}
-              onExecuteTurn={() => dispatch({ type: 'EXECUTE_COMBAT_TURN' })}
-              onAutoCloakRetreat={() => dispatch({ type: 'EMERGENCY_AUTO_CLOAK' })}
+              onExecuteTurn={() => playerDispatch({ type: 'EXECUTE_COMBAT_TURN' })}
+              onAutoCloakRetreat={() => playerDispatch({ type: 'EMERGENCY_AUTO_CLOAK' })}
               plasma={state.plasma}
               inCombat={inCombat}
               enemyPresent={!!state.encounter.enemy}
+              coopNetworkActive={isNetworkCoop}
+              isPrimaryShip={state.mothership.primaryShip === 'player'}
+              localCombatReady={state.mothership.localCombatReady}
+              partnerCombatReady={state.mothership.partnerCombatReady}
+              onToggleCombatReady={() => playerDispatch({ type: 'SET_COMBAT_READY' })}
             />
           </div>
         )}
@@ -1096,7 +1717,7 @@ export const App: React.FC = () => {
         {!inCombat && (
           <div className="pointer-events-auto hidden md:flex flex-col items-end gap-1.5">
             {state.log.length > 0 && (
-              <div className="px-3 py-1 rounded-full bg-slate-950/90 border border-slate-800 text-[11px] text-cyan-200 shadow-lg">
+              <div className="px-3 py-1 rounded-full bg-slate-950/90 border border-slate-800 text-[11px] text-cyan-200 shadow-lg max-w-md truncate">
                 {state.log[state.log.length - 1].text}
               </div>
             )}
@@ -1105,7 +1726,7 @@ export const App: React.FC = () => {
               {ROOM_ORDER.map((id) => {
                 const def = ROOMS[id];
                 const Icon = def.icon;
-                const isManned = manned === id;
+                const roomManned = isRoomManned(state, id);
                 const isHere = currentRoom === id;
                 const hp = state.roomHp[id];
                 const p = state.layout.find((r) => r.id === id)!;
@@ -1116,7 +1737,7 @@ export const App: React.FC = () => {
                     onClick={() => handleConsoleClick(id, consoleCell(p))}
                     title={def.label}
                     className={`group relative flex items-center gap-2 px-2.5 py-1.5 rounded-xl border transition ${
-                      isManned
+                      roomManned
                         ? 'bg-emerald-950/50 border-emerald-400/70'
                         : isHere
                           ? 'bg-slate-900 border-cyan-400/60'
@@ -1127,7 +1748,7 @@ export const App: React.FC = () => {
                     <div className="text-left">
                       <div className="flex items-center gap-1">
                         <span className="text-[11px] font-bold text-white">{def.name}</span>
-                        {isManned && (
+                        {roomManned && (
                           <span className="inline-flex items-center px-1 rounded text-[9px] font-extrabold bg-emerald-500/25 text-emerald-300">
                             <UserCheck className="w-2.5 h-2.5 mr-0.5" />
                             +25%
@@ -1166,8 +1787,8 @@ export const App: React.FC = () => {
             setMobileCombatView('player');
             walkTo(cell, null);
           }}
-          onTogglePause={() => dispatch({ type: 'PAUSE' })}
-          onStepTurn={() => dispatch({ type: 'TICK' })}
+          onTogglePause={() => playerDispatch({ type: 'PAUSE' })}
+          onStepTurn={() => playerDispatch({ type: 'TICK' })}
           onOpenMap={() => setMapOpen(true)}
           onTogglePowerDrawer={() => setMobileMenuOpen((v) => !v)}
           powerDrawerOpen={mobileMenuOpen}
@@ -1178,11 +1799,20 @@ export const App: React.FC = () => {
       <ConsoleModal
         room={openModal}
         state={state}
-        dispatch={dispatch}
+        dispatch={playerDispatch}
         onClose={() => setOpenModal(null)}
         onMoveToConsole={(roomId) => {
-          const p = state.layout.find((r) => r.id === roomId);
-          if (p) walkTo(consoleCell(p), roomId);
+          const ownPiece = state.layout.find((r) => r.id === roomId);
+          const partnerPiece = mothershipDock?.partnerLayout.find((r) => r.id === roomId);
+          if (ownPiece && partnerPiece) {
+            const c1 = consoleCell(ownPiece);
+            const c2 = consoleCell(partnerPiece);
+            const d1 = Math.abs(c1.x - state.crew.cell.x) + Math.abs(c1.y - state.crew.cell.y);
+            const d2 = Math.abs(c2.x - state.crew.cell.x) + Math.abs(c2.y - state.crew.cell.y);
+            walkTo(d2 < d1 ? c2 : c1, roomId);
+          } else if (ownPiece) {
+            walkTo(consoleCell(ownPiece), roomId);
+          }
         }}
         onSelectRoom={(roomId) => setOpenModal(roomId)}
         onOpenSectorMap={() => setMapOpen(true)}
@@ -1193,7 +1823,7 @@ export const App: React.FC = () => {
       <SectorMapModal
         open={mapOpen}
         state={state}
-        dispatch={dispatch}
+        dispatch={playerDispatch}
         onClose={() => setMapOpen(false)}
       />
 
@@ -1201,23 +1831,25 @@ export const App: React.FC = () => {
       <GarageShopModal
         open={shopOpen}
         state={state}
-        dispatch={dispatch}
+        dispatch={playerDispatch}
         onClose={() => setShopOpen(false)}
         onOpenRearrange={() => {
-          if (canEditLayout(state)) enterEditMode();
+          if (canRearrange) enterEditMode();
         }}
       />
 
-      {/* CO-OP MOTHERSHIP DOCKING MODAL */}
+      {/* CO-OP MOTHERSHIP DOCKING & SUPABASE SETUP MODAL */}
       <CoopDockingModal
         open={coopOpen}
         state={state}
-        dispatch={dispatch}
+        dispatch={playerDispatch}
         onClose={() => setCoopOpen(false)}
+        onConnectRoomCode={connectToRoomCode}
+        onRequestUndock={handleRequestUndock}
       />
 
       {/* FTL-STYLE "BLUE OPTION" STORY EVENT MODAL */}
-      <StoryEventModal state={state} dispatch={dispatch} />
+      <StoryEventModal state={state} dispatch={playerDispatch} />
     </div>
   );
 };

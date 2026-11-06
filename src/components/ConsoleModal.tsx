@@ -42,8 +42,8 @@ import {
   getRank,
   getReputationBadge,
   hostileActive,
+  isRoomManned,
   lifeRates,
-  mannedRoom,
   offers,
   shieldMax,
   type Action,
@@ -149,8 +149,7 @@ export const ConsoleModal: React.FC<Props> = ({
 
   const def = ROOMS[room];
   const Icon = def.icon;
-  const manned = mannedRoom(state);
-  const isManned = manned === room;
+  const isManned = isRoomManned(state, room);
   const rates = lifeRates(state);
   const rankInfo = getRank(state.rankXp);
   const repBadge = getReputationBadge(state.reputation);
@@ -222,7 +221,7 @@ export const ConsoleModal: React.FC<Props> = ({
               const rDef = ROOMS[rId];
               const RIcon = rDef.icon;
               const active = rId === room;
-              const rManned = manned === rId;
+              const rManned = isRoomManned(state, rId);
               return (
                 <button
                   key={rId}
@@ -245,6 +244,25 @@ export const ConsoleModal: React.FC<Props> = ({
 
         {/* Modal Body */}
         <div className="p-3.5 sm:p-5 space-y-4 flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y">
+        {/* Field Room Repair Banner (Synced across Mothership Co-Op) */}
+        {state.roomHp[room] < def.maxHp && (
+          <div className="rounded-xl bg-red-950/40 border border-red-500/40 p-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs">
+              <Wrench className="w-4 h-4 text-red-400 shrink-0" />
+              <span className="text-red-200 font-bold">
+                {def.name} Damaged ({state.roomHp[room]}/{def.maxHp} HP) — Walk crew inside or patch with Scrap.
+              </span>
+            </div>
+            <button
+              type="button"
+              disabled={state.scrap < 5}
+              onClick={() => dispatch({ type: 'REPAIR_ROOM', roomId: room, targetShip: 'self' })}
+              className="px-3 py-1 rounded-lg text-xs font-extrabold bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-slate-950 flex items-center gap-1"
+            >
+              <Wrench className="w-3.5 h-3.5" /> Repair +1 HP (5 Scrap)
+            </button>
+          </div>
+        )}
         {/* 1. BRIDGE / COCKPIT */}
         {room === 'bridge' && (
           <div className="space-y-4">

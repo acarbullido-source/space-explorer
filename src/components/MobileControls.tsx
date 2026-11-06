@@ -17,7 +17,7 @@ import {
 import type { Cell, Dir, GameState, RoomId } from '../game/types';
 import { ROOMS, ROOM_ORDER } from '../game/rooms';
 import { consoleCell } from '../game/layout';
-import { mannedRoom } from '../game/state';
+import { isRoomManned } from '../game/state';
 
 interface Props {
   state: GameState;
@@ -81,7 +81,6 @@ export const MobileControls: React.FC<Props> = ({
     };
   }, []);
 
-  const manned = mannedRoom(state);
   const roomDef = currentRoom ? ROOMS[currentRoom] : null;
 
   return (
@@ -175,7 +174,7 @@ export const MobileControls: React.FC<Props> = ({
         {ROOM_ORDER.map((id) => {
           const def = ROOMS[id];
           const Icon = def.icon;
-          const isManned = manned === id;
+          const isManned = isRoomManned(state, id);
           const isHere = currentRoom === id;
           const hp = state.roomHp[id];
           const p = state.layout.find((r) => r.id === id)!;

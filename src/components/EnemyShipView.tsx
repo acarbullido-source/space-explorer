@@ -10,6 +10,9 @@ interface Props {
   selectedWeaponSlot: number | null;
   onTargetRoom: (roomId: string) => void;
   targetRoomId: string | null;
+  coopActive?: boolean;
+  primaryTargetRoomId?: string | null;
+  wingmanTargetRoomId?: string | null;
 }
 
 const ROOM_ICONS: Record<string, React.FC<{ className?: string; style?: React.CSSProperties }>> = {
@@ -31,6 +34,9 @@ export const EnemyShipView: React.FC<Props> = ({
   equippedWeapons,
   selectedWeaponSlot,
   onTargetRoom,
+  coopActive = false,
+  primaryTargetRoomId = null,
+  wingmanTargetRoomId = null,
 }) => {
   const hullPct = Math.round((enemy.hull / Math.max(1, enemy.maxHull)) * 100);
   const hullSegments = 10;
@@ -38,14 +44,24 @@ export const EnemyShipView: React.FC<Props> = ({
   const hullColor =
     hullPct > 55 ? 'bg-red-400' : hullPct > 25 ? 'bg-amber-400' : 'bg-red-600';
 
-  // Find which player weapons are targeting which rooms
+  // Find which player weapons & co-op ships (P1 vs P2) are targeting which rooms
   const targetingWeaponsByRoom: Record<string, string[]> = {};
+  const p1Rooms = new Set<string>();
+  const p2Rooms = new Set<string>();
+  if (primaryTargetRoomId) p1Rooms.add(primaryTargetRoomId);
+  if (coopActive && wingmanTargetRoomId) p2Rooms.add(wingmanTargetRoomId);
+
   equippedWeapons.forEach((slot) => {
     if (slot.targetRoomId) {
       if (!targetingWeaponsByRoom[slot.targetRoomId]) {
         targetingWeaponsByRoom[slot.targetRoomId] = [];
       }
       targetingWeaponsByRoom[slot.targetRoomId].push(WEAPONS[slot.weaponId].name);
+      if (coopActive && slot.lockedByRole === 'wingman') {
+        p2Rooms.add(slot.targetRoomId);
+      } else {
+        p1Rooms.add(slot.targetRoomId);
+      }
     }
   });
 
@@ -449,19 +465,35 @@ export const EnemyShipView: React.FC<Props> = ({
                   </div>
                 </foreignObject>
 
-                {/* Target Lock Reticle Banner */}
-                {isTargeted && (
+                {/* Target Lock Reticle Banner (Supports Simultaneous P1 & P2 Co-Op Reticles) */}
+                {(isTargeted || p1Rooms.has(room.id) || p2Rooms.has(room.id)) && (
                   <g className="pointer-events-none">
-                    <circle
-                      cx={rx + rw / 2}
-                      cy={ry + rh / 2}
-                      r={24}
-                      fill="none"
-                      stroke="#ef4444"
-                      strokeWidth={2}
-                      strokeDasharray="4 3"
-                      className="animate-spin"
-                    />
+                    {/* P1 Reticle Ring */}
+                    {(p1Rooms.has(room.id) || (!coopActive && isTargeted)) && (
+                      <circle
+                        cx={rx + rw / 2}
+                        cy={ry + rh / 2}
+                        r={24}
+                        fill="none"
+                        stroke="#ef4444"
+                        strokeWidth={2}
+                        strokeDasharray="4 3"
+                        className="animate-spin"
+                      />
+                    )}
+                    {/* P2 Wingman Reticle Ring */}
+                    {coopActive && p2Rooms.has(room.id) && (
+                      <circle
+                        cx={rx + rw / 2}
+                        cy={ry + rh / 2}
+                        r={p1Rooms.has(room.id) ? 31 : 24}
+                        fill="none"
+                        stroke="#c084fc"
+                        strokeWidth={2.2}
+                        strokeDasharray="6 3"
+                        className="animate-spin"
+                      />
+                    )}
                     <rect
                       x={rx + 2}
                       y={ry + rh - 18}
@@ -469,18 +501,24 @@ export const EnemyShipView: React.FC<Props> = ({
                       height={16}
                       rx={3}
                       fill="rgba(15, 23, 42, 0.95)"
-                      stroke="#ef4444"
+                      stroke={coopActive && p2Rooms.has(room.id) && !p1Rooms.has(room.id) ? '#c084fc' : '#ef4444'}
                       strokeWidth={1}
                     />
                     <text
                       x={rx + rw / 2}
                       y={ry + rh - 6}
                       textAnchor="middle"
-                      fill="#fca5a5"
+                      fill={coopActive && p2Rooms.has(room.id) && !p1Rooms.has(room.id) ? '#e9d5ff' : '#fca5a5'}
                       fontSize={8}
                       fontWeight={800}
                     >
-                      🎯 LOCKED
+                      {coopActive
+                        ? p1Rooms.has(room.id) && p2Rooms.has(room.id)
+                          ? '🎯 P1 + P2 LOCK'
+                          : p2Rooms.has(room.id)
+                            ? '🎯 P2 LOCK'
+                            : '🎯 P1 LOCK'
+                        : '🎯 LOCKED'}
                     </text>
                   </g>
                 )}

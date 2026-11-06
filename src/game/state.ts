@@ -1,8 +1,17 @@
 import { DEFAULT_LAYOUT, ROOMS, ROOM_ORDER, SYSTEMS, SYSTEM_ORDER } from './rooms';
-import { computeDock, consoleCell, key, occupancy, same, validateLayout } from './layout';
+import {
+  computeDock,
+  computeMothershipDock,
+  consoleCell,
+  key,
+  occupancy,
+  same,
+  validateLayout,
+} from './layout';
 import { generateSector, pick, rand, randInt, type Rng } from './sector';
 import type {
   Cell,
+  CombatProjectile,
   EnemySys,
   Encounter,
   Enemy,
@@ -24,7 +33,17 @@ import type {
 import { WEAPONS, type WeaponId } from './weapons';
 import { ALL_UPGRADES, type UpgradeModuleId } from './upgrades';
 import { ALIEN_SPECIES, type AlienSpeciesId } from './diplomacy';
-import { createAiWingman, poolMothershipPlasma } from './coop';
+import {
+  createAiWingman,
+  createPartnerShipFromPresence,
+  poolMothershipPlasma,
+  type CombatExecuteTurnBroadcast,
+  type CombatTargetLockBroadcast,
+  type MothershipChannelStatus,
+  type MothershipTransport,
+  type ShipPresenceEntry,
+  type ShipSystemUpdateBroadcast,
+} from './coop';
 import { BIOMES, getBiomeBySector, type BiomeId } from './biomes';
 import { FACTIONS, getFactionForSector } from './factions';
 import {
@@ -185,9 +204,49 @@ export type Action =
   | { type: 'ENGAGE_VESSEL'; objectId: string }
   | { type: 'SAVE_LAYOUT'; layout: Layout }
   | { type: 'UPGRADE_MODULE'; moduleId: UpgradeModuleId; currency: 'xp' | 'scrap' }
+  | { type: 'REPAIR_ROOM'; roomId: RoomId; targetShip?: 'self' | 'partner' }
   | { type: 'SIGN_TREATY'; species: AlienSpeciesId }
   | { type: 'DOCK_MOTHERSHIP'; mode: 'local_ai' | 'network_code'; roomCode?: string }
-  | { type: 'UNDOCK_MOTHERSHIP' }
+  | {
+      type: 'START_NETWORK_MOTHERSHIP';
+      roomCode: string;
+      transport: MothershipTransport;
+    }
+  | {
+      type: 'SET_MOTHERSHIP_STATUS';
+      status: MothershipChannelStatus;
+      errorMessage?: string;
+    }
+  | {
+      type: 'SYNC_PRESENCE_MOTHERSHIP';
+      ships: ShipPresenceEntry[];
+      partner: ShipPresenceEntry | null;
+      isPrimary: boolean;
+    }
+  | {
+      type: 'PARTNER_CREW_MOVED';
+      pos: { x: number; y: number };
+      cell: Cell;
+      facing: number;
+    }
+  | {
+      type: 'APPLY_SHIP_SYSTEM_UPDATE';
+      payload: ShipSystemUpdateBroadcast;
+      myClientId: string;
+    }
+  | { type: 'SET_COMBAT_READY'; ready?: boolean }
+  | { type: 'APPLY_COMBAT_TARGET_LOCK'; payload: CombatTargetLockBroadcast }
+  | {
+      type: 'APPLY_COMBAT_EXECUTE_TURN';
+      payload: CombatExecuteTurnBroadcast;
+      myClientId: string;
+    }
+  | { type: 'CLEAR_COMBAT_FX' }
+  | {
+      type: 'UNDOCK_MOTHERSHIP';
+      reason?: 'manual' | 'partner_left';
+      sharedPlasmaSnapshot?: number;
+    }
   | { type: 'TOGGLE_PRIMARY_SHIP' }
   | { type: 'MOVE_PARTNER_CREW'; cell: Cell }
   | { type: 'TRIGGER_STORY_EVENT'; eventId?: string }
@@ -561,10 +620,19 @@ export function initialState(seed: number): GameState {
       primaryShip: 'player',
       partner: null,
       mode: 'local_ai',
-      roomCode: '7249',
+      transport: 'supabase',
+      channelStatus: 'disconnected',
+      roomCode: '4821',
       connected: false,
+      presenceShips: [],
+      localCombatReady: false,
+      partnerCombatReady: false,
+      primaryTargetRoomId: null,
+      wingmanTargetRoomId: null,
     },
     partnerCrewPos: null,
+    partnerCrewCell: null,
+    partnerCrewFacing: 0,
 
     /* 5 Solar System Biomes & 4 Factions */
     biome: 'shattered_cradle',
@@ -590,12 +658,52 @@ export function initialState(seed: number): GameState {
 
 export function mannedRoom(s: GameState): RoomId | null {
   for (const p of s.layout) if (same(consoleCell(p), s.crew.cell)) return p.id;
+  if (s.mothership?.active && s.mothership.partner) {
+    const mDock = computeMothershipDock(s.layout, s.mothership.partner.layout);
+    if (mDock) {
+      for (const p of mDock.partnerLayout) {
+        if (same(consoleCell(p), s.crew.cell)) return p.id;
+      }
+    }
+  }
   return null;
 }
 
-export function crewLocation(s: GameState): RoomId | 'tube' | 'partner' | null {
+/** Returns all RoomIds currently manned (+25%) by either player's astronaut across both docked ships. */
+export function mannedRooms(s: GameState): Set<RoomId> {
+  const out = new Set<RoomId>();
+  const p2 = s.mothership?.active ? s.partnerCrewCell : null;
+  for (const p of s.layout) {
+    const c = consoleCell(p);
+    if (same(c, s.crew.cell) || same(c, p2)) out.add(p.id);
+  }
+  if (s.mothership?.active && s.mothership.partner) {
+    const mDock = computeMothershipDock(s.layout, s.mothership.partner.layout);
+    if (mDock) {
+      for (const p of mDock.partnerLayout) {
+        const c = consoleCell(p);
+        if (same(c, s.crew.cell) || same(c, p2)) out.add(p.id);
+      }
+    }
+  }
+  return out;
+}
+
+export function isRoomManned(s: GameState, id: RoomId): boolean {
+  return mannedRooms(s).has(id);
+}
+
+export function crewLocation(s: GameState): RoomId | 'tube' | 'partner' | 'mothership' | null {
   const room = occupancy(s.layout).get(key(s.crew.cell));
   if (room) return room;
+  if (s.mothership?.active && s.mothership.partner) {
+    const mDock = computeMothershipDock(s.layout, s.mothership.partner.layout);
+    if (mDock) {
+      const pRoom = occupancy(mDock.partnerLayout).get(key(s.crew.cell));
+      if (pRoom) return pRoom;
+      if (mDock.collar.some((c) => same(c, s.crew.cell))) return 'mothership';
+    }
+  }
   if (s.docked) {
     const dock = computeDock(s.layout);
     if (dock?.tube.some((c) => same(c, s.crew.cell))) return 'tube';
@@ -612,7 +720,7 @@ export const usedPower = (s: GameState) => SYSTEM_ORDER.reduce((n, k) => n + s.p
 /** Net Plasma gain/drain per turn based on solar/reactor generation vs allocated system pips. */
 export function netPlasmaPerTurn(s: GameState): number {
   const engHp = s.roomHp.engineering / ROOMS.engineering.maxHp;
-  const engManned = mannedRoom(s) === 'engineering' ? 3 : 0;
+  const engManned = isRoomManned(s, 'engineering') ? 3 : 0;
   const biomeDef = BIOMES[s.biome ?? 'shattered_cradle'];
   const solarMult = biomeDef.solarPlasmaMultiplier;
 
@@ -657,7 +765,7 @@ export function output(s: GameState, id: RoomId): number {
   const hp = s.roomHp[id] / def.maxHp;
   const pw = def.system ? Math.min(1, s.power[def.system] / SYSTEMS[def.system].base) : 1;
   const hasPlasma = s.plasma > 0 ? 1 : 0.35;
-  return hp * pw * hasPlasma * (mannedRoom(s) === id ? MANNED_BONUS : 1);
+  return hp * pw * hasPlasma * (isRoomManned(s, id) ? MANNED_BONUS : 1);
 }
 
 export const shieldMax = (s: GameState) => {
@@ -674,7 +782,7 @@ export function evasion(s: GameState): number {
   let v =
     output(s, 'engineering') * 30 +
     (s.engineMode === 'evasion' ? 15 + varLvl * 5 : 0) +
-    (mannedRoom(s) === 'bridge' ? 5 : 0);
+    (isRoomManned(s, 'bridge') ? 5 : 0);
 
   // Nova Cannon charging penalty: -50% dodge
   const novaCharging = s.equippedWeapons.some(
@@ -873,9 +981,15 @@ export function executeCombatTurnDraft(s: GameState, r: Rng) {
 
   s.combatPhase = 'executing';
   s.turn += 1;
-  const manned = mannedRoom(s);
+  s.fx.shot += 1;
+  s.mothership.localCombatReady = false;
+  s.mothership.partnerCombatReady = false;
+
+  const engIsManned = isRoomManned(s, 'engineering');
   const fd: FloatingDamage[] = [];
+  const projs: CombatProjectile[] = [];
   let nextFdId = Date.now();
+  let nextProjId = Date.now() + 5000;
 
   const addFd = (text: string, x: number, y: number, color: string) => {
     fd.push({ id: nextFdId++, text, x, y, color, alpha: 1 });
@@ -883,7 +997,7 @@ export function executeCombatTurnDraft(s: GameState, r: Rng) {
 
   // 1. Initiative Check (Computing Cores grant +8 initiative speed per level)
   const computingBonus = (s.moduleLevels?.computing_cores ?? 0) * 8;
-  const playerSpeed = 20 + s.power.engines * 6 + (manned === 'engineering' ? 10 : 0) + computingBonus;
+  const playerSpeed = 20 + s.power.engines * 6 + (engIsManned ? 10 : 0) + computingBonus;
   const enemyEngRoom = e.rooms.find((rm) => rm.id === 'engines');
   const enemySpeed = enemyEngRoom && enemyEngRoom.hp > 0 ? e.speed : 0;
   const playerActsFirst = playerSpeed >= enemySpeed;
@@ -894,8 +1008,18 @@ export function executeCombatTurnDraft(s: GameState, r: Rng) {
   const enemyDodgeBase = enemyEngRoom && enemyEngRoom.hp > 0 ? 15 : 0;
   const enemyDodge = enemyBridgeRoom && enemyBridgeRoom.hp > 0 ? enemyDodgeBase + 5 : 0;
 
+  const projMeta: Record<WeaponId, { type: CombatProjectile['type']; color: string }> = {
+    repeater: { type: 'bolt', color: '#4ade80' },
+    beam: { type: 'beam', color: '#22d3ee' },
+    caster: { type: 'bomb', color: '#fbbf24' },
+    whip: { type: 'whip', color: '#f59e0b' },
+    nova: { type: 'cannon', color: '#ef4444' },
+    torpedo: { type: 'torpedo', color: '#f43f5e' },
+  };
+
   const resolvePlayerWeapons = () => {
-    for (const slot of s.equippedWeapons) {
+    for (let sIdx = 0; sIdx < s.equippedWeapons.length; sIdx++) {
+      const slot = s.equippedWeapons[sIdx];
       if (!slot.targetRoomId) continue;
       const def = WEAPONS[slot.weaponId];
       if (s.plasma < def.cost) {
@@ -903,7 +1027,8 @@ export function executeCombatTurnDraft(s: GameState, r: Rng) {
         continue;
       }
 
-      const targetRoom = e.rooms.find((rm) => rm.id === slot.targetRoomId);
+      const targetRoomIdx = e.rooms.findIndex((rm) => rm.id === slot.targetRoomId);
+      const targetRoom = targetRoomIdx >= 0 ? e.rooms[targetRoomIdx] : undefined;
       if (!targetRoom) continue;
 
       // Deduct Plasma cost
@@ -920,6 +1045,20 @@ export function executeCombatTurnDraft(s: GameState, r: Rng) {
           slot.charged = false; // fire now!
         }
       }
+
+      const pm = projMeta[slot.weaponId];
+      projs.push({
+        id: nextProjId++,
+        weaponId: slot.weaponId,
+        source: 'player',
+        startX: 290,
+        startY: 205 + sIdx * 28,
+        targetX: 675,
+        targetY: 175 + targetRoomIdx * 28,
+        color: pm.color,
+        type: pm.type,
+        progress: 0.72,
+      });
 
       // Check Enemy Dodge
       if (rand(r) * 100 < enemyDodge) {
@@ -1060,6 +1199,19 @@ export function executeCombatTurnDraft(s: GameState, r: Rng) {
       return;
     }
 
+    projs.push({
+      id: nextProjId++,
+      weaponId: 'enemy',
+      source: 'enemy',
+      startX: 665,
+      startY: 215,
+      targetX: 295,
+      targetY: 225,
+      color: '#ef4444',
+      type: 'bolt',
+      progress: 0.65,
+    });
+
     if (rand(r) * 100 < playerDodge) {
       push(s, 'Enemy laser volley dodged!', 'good');
       addFd('EVADED!', 280, 200, '#22d3ee');
@@ -1091,17 +1243,40 @@ export function executeCombatTurnDraft(s: GameState, r: Rng) {
     if (s.hull > 0) resolvePlayerWeapons();
   }
 
-  // AI Wingman Auxiliary Support Volley (in Mothership mode)
+  // Wingman / Co-Op Partner Auxiliary Coordinated Volley (in Mothership mode)
   if (s.mothership?.active && s.mothership.partner && e.hull > 0) {
     const wingmanDmg = 16;
+    const wingmanRoom =
+      e.rooms.find((rm) => rm.id === s.mothership.wingmanTargetRoomId) ?? e.rooms[0];
+    projs.push({
+      id: nextProjId++,
+      weaponId: 'beam',
+      source: 'player',
+      startX: 290,
+      startY: 310,
+      targetX: 675,
+      targetY: 210,
+      color: '#c084fc',
+      type: 'beam',
+      progress: 1,
+    });
     if (e.shields > 0) {
       e.shields -= 1;
-      addFd('WINGMAN SHIELD HIT', 680, 160, '#38bdf8');
-      push(s, 'AI Wingman laser stripped 1 enemy shield bubble!', 'good');
+      addFd('WINGMAN SHIELD HIT', 680, 160, '#c084fc');
+      push(s, `${s.mothership.partner.name} laser stripped 1 enemy shield bubble!`, 'good');
     } else {
       e.hull = Math.max(0, e.hull - wingmanDmg);
-      addFd(`−${wingmanDmg} WINGMAN VOLLEY`, 680, 190, '#38bdf8');
-      push(s, `AI Wingman coordinated volley dealt −${wingmanDmg} damage to enemy!`, 'good');
+      if (wingmanRoom) {
+        wingmanRoom.hp = Math.max(0, wingmanRoom.hp - 1);
+      }
+      addFd(`−${wingmanDmg} CO-OP VOLLEY`, 680, 190, '#c084fc');
+      push(
+        s,
+        `${s.mothership.partner.name} coordinated volley dealt −${wingmanDmg} damage${
+          wingmanRoom ? ` to ${wingmanRoom.name}` : ''
+        }!`,
+        'good',
+      );
     }
   }
 
@@ -1115,8 +1290,9 @@ export function executeCombatTurnDraft(s: GameState, r: Rng) {
     }
   }
 
-  // Floating damage numbers
+  // Floating damage numbers & weapon projectiles
   s.floatingDamages = fd;
+  s.projectiles = projs;
 
   // Check Victory
   if (e.hull <= 0) {
@@ -1185,7 +1361,6 @@ function tickDraft(s: GameState, r: Rng) {
   if (hostileActive(s)) return;
 
   s.turn += 1;
-  const manned = mannedRoom(s);
 
   // 1. Universal Plasma Reserve update
   const netPlasma = netPlasmaPerTurn(s);
@@ -1218,11 +1393,39 @@ function tickDraft(s: GameState, r: Rng) {
   s.crew.restBuff = Math.max(0, s.crew.restBuff - 1);
   s.restCooldown = Math.max(0, s.restCooldown - 1);
 
-  // Crew repairs room
-  const here = occupancy(s.layout).get(key(s.crew.cell));
+  // Crew repairs room (supports both players across either docked Mothership hull)
+  const localOcc = occupancy(s.layout);
+  const here = localOcc.get(key(s.crew.cell));
   if (here && s.roomHp[here] < ROOMS[here].maxHp) {
     s.roomHp[here] += 1;
     push(s, `Repaired ${ROOMS[here].name}.`, 'good');
+  }
+  if (s.mothership?.active && s.mothership.partner) {
+    if (s.partnerCrewCell) {
+      const partnerOnSelf = localOcc.get(key(s.partnerCrewCell));
+      if (partnerOnSelf && s.roomHp[partnerOnSelf] < ROOMS[partnerOnSelf].maxHp) {
+        s.roomHp[partnerOnSelf] += 1;
+        push(s, `Co-Op crew repaired ${ROOMS[partnerOnSelf].name}!`, 'good');
+      }
+    }
+    const mDock = computeMothershipDock(s.layout, s.mothership.partner.layout);
+    if (mDock) {
+      const partnerOcc = occupancy(mDock.partnerLayout);
+      const selfOnPartner = partnerOcc.get(key(s.crew.cell));
+      if (selfOnPartner && s.mothership.partner.roomHp[selfOnPartner] < ROOMS[selfOnPartner].maxHp) {
+        s.mothership.partner.roomHp[selfOnPartner] += 1;
+        push(s, `Repaired partner ${ROOMS[selfOnPartner].name}!`, 'good');
+      }
+      if (s.partnerCrewCell) {
+        const partnerOnPartner = partnerOcc.get(key(s.partnerCrewCell));
+        if (
+          partnerOnPartner &&
+          s.mothership.partner.roomHp[partnerOnPartner] < ROOMS[partnerOnPartner].maxHp
+        ) {
+          s.mothership.partner.roomHp[partnerOnPartner] += 1;
+        }
+      }
+    }
   }
 
   // Auto-repairs from drones or 3+ life pips
@@ -1270,12 +1473,13 @@ function tickDraft(s: GameState, r: Rng) {
   }
 
   // 4. Magnetic Shields recharge
+  const sciManned = isRoomManned(s, 'science');
   const smax = shieldMax(s);
   if (s.shieldLayers >= smax) {
     s.shieldLayers = smax;
     s.shieldCharge = 0;
   } else if (s.plasma > 0) {
-    s.shieldCharge += 0.55 * (s.roomHp.science / ROOMS.science.maxHp) * (manned === 'science' ? MANNED_BONUS : 1);
+    s.shieldCharge += 0.55 * (s.roomHp.science / ROOMS.science.maxHp) * (sciManned ? MANNED_BONUS : 1);
     if (s.shieldCharge >= 1) {
       s.shieldLayers += 1;
       s.shieldCharge = 0;
@@ -1297,7 +1501,7 @@ function tickDraft(s: GameState, r: Rng) {
 
   // 6. Artifact analysis
   if (s.analyzing > 0) {
-    s.analyzing = Math.max(0, s.analyzing - (manned === 'science' ? 2 : 1));
+    s.analyzing = Math.max(0, s.analyzing - (sciManned ? 2 : 1));
     if (s.analyzing === 0) {
       const bonusScrap = randInt(r, 15, 25);
       const bonusPlasma = 35;
@@ -1375,11 +1579,41 @@ export function reducer(state: GameState, a: Action): GameState {
     case 'SELECT_WEAPON_SLOT':
       return { ...state, selectedWeaponSlot: a.index };
     case 'SET_WEAPON_TARGET': {
+      const myRole: 'primary' | 'wingman' =
+        state.mothership.active && state.mothership.primaryShip === 'partner'
+          ? 'wingman'
+          : 'primary';
       const weapons = state.equippedWeapons.map((slot, idx) =>
-        idx === a.slotIndex ? { ...slot, targetRoomId: a.targetRoomId } : slot,
+        idx === a.slotIndex
+          ? { ...slot, targetRoomId: a.targetRoomId, lockedByRole: myRole }
+          : slot,
       );
-      return { ...state, equippedWeapons: weapons };
+      return {
+        ...state,
+        equippedWeapons: weapons,
+        mothership: {
+          ...state.mothership,
+          primaryTargetRoomId:
+            myRole === 'primary' ? a.targetRoomId : state.mothership.primaryTargetRoomId,
+          wingmanTargetRoomId:
+            myRole === 'wingman' ? a.targetRoomId : state.mothership.wingmanTargetRoomId,
+        },
+      };
     }
+    case 'PARTNER_CREW_MOVED':
+      return {
+        ...state,
+        partnerCrewPos: a.pos,
+        partnerCrewCell: a.cell,
+        partnerCrewFacing: a.facing,
+      };
+    case 'CLEAR_COMBAT_FX':
+      if (state.projectiles.length === 0 && state.floatingDamages.length === 0) return state;
+      return {
+        ...state,
+        projectiles: [],
+        floatingDamages: [],
+      };
     case 'SWAP_WEAPON': {
       const weapons = state.equippedWeapons.map((slot, idx) =>
         idx === a.slotIndex
@@ -1847,6 +2081,24 @@ export function reducer(state: GameState, a: Action): GameState {
       break;
     }
 
+    case 'REPAIR_ROOM': {
+      const repairCost = 5;
+      if (a.targetShip === 'partner' && s.mothership.active && s.mothership.partner) {
+        const curHp = s.mothership.partner.roomHp[a.roomId];
+        if (curHp >= ROOMS[a.roomId].maxHp || s.scrap < repairCost) break;
+        s.scrap -= repairCost;
+        s.mothership.partner.roomHp[a.roomId] = curHp + 1;
+        push(s, `Field-repaired partner ${ROOMS[a.roomId].name} (+1 HP, −${repairCost} Scrap).`, 'good');
+      } else {
+        const curHp = s.roomHp[a.roomId];
+        if (curHp >= ROOMS[a.roomId].maxHp || s.scrap < repairCost) break;
+        s.scrap -= repairCost;
+        s.roomHp[a.roomId] = curHp + 1;
+        push(s, `Field-repaired ${ROOMS[a.roomId].name} (+1 HP, −${repairCost} Scrap).`, 'good');
+      }
+      break;
+    }
+
     case 'SIGN_TREATY': {
       const species = ALIEN_SPECIES[a.species];
       if (!species) break;
@@ -1874,18 +2126,31 @@ export function reducer(state: GameState, a: Action): GameState {
         break;
       }
       const partner = createAiWingman();
+      const mDock = computeMothershipDock(s.layout, partner.layout);
+      const worldCell = mDock
+        ? mDock.mapPartnerCellToWorld(partner.crew.cell)
+        : { ...partner.crew.cell };
       s.mothership = {
         active: true,
         primaryShip: 'player',
         partner,
-        mode: a.mode,
+        mode: 'local_ai',
+        transport: 'local_ai',
+        channelStatus: 'docked',
         roomCode: a.roomCode ?? s.mothership.roomCode,
         connected: true,
+        presenceShips: [],
+        localCombatReady: false,
+        partnerCombatReady: true,
+        primaryTargetRoomId: s.equippedWeapons[0]?.targetRoomId ?? null,
+        wingmanTargetRoomId: 'shields',
       };
       const pooled = poolMothershipPlasma(s.plasma, partner.plasma);
       s.plasma = pooled.total;
       s.maxPlasma = s.maxPlasma + partner.maxPlasma;
-      s.partnerCrewPos = { ...partner.crew.cell };
+      s.partnerCrewPos = { ...worldCell };
+      s.partnerCrewCell = { ...worldCell };
+      s.partnerCrewFacing = 0;
       push(
         s,
         `MOTHERSHIP DOCKED! ${partner.name} joined formation. Plasma & Shields pooled with 15% safety reserves!`,
@@ -1894,17 +2159,235 @@ export function reducer(state: GameState, a: Action): GameState {
       break;
     }
 
+    case 'START_NETWORK_MOTHERSHIP': {
+      s.mothership = {
+        ...s.mothership,
+        mode: 'network_code',
+        transport: a.transport,
+        roomCode: a.roomCode,
+        channelStatus: 'connecting',
+        errorMessage: undefined,
+        connected: false,
+        localCombatReady: false,
+        partnerCombatReady: false,
+      };
+      push(
+        s,
+        `Tuning Airlock Docking Beacon to channel mothership-room-${a.roomCode}…`,
+        'info',
+      );
+      break;
+    }
+
+    case 'SET_MOTHERSHIP_STATUS': {
+      s.mothership.channelStatus = a.status;
+      s.mothership.errorMessage = a.errorMessage;
+      if (a.status === 'error' && a.errorMessage) {
+        push(s, `Docking Comms Error: ${a.errorMessage}`, 'bad');
+      }
+      break;
+    }
+
+    case 'SYNC_PRESENCE_MOTHERSHIP': {
+      s.mothership.presenceShips = a.ships;
+      s.mothership.primaryShip = a.isPrimary ? 'player' : 'partner';
+      if (!a.partner) {
+        if (!s.mothership.active) {
+          s.mothership.channelStatus = 'waiting_partner';
+          s.mothership.connected = false;
+        }
+        break;
+      }
+
+      const alreadyDockedWithPartner =
+        s.mothership.active && s.mothership.partner?.id === a.partner.clientId;
+
+      if (!alreadyDockedWithPartner) {
+        const partnerShip = createPartnerShipFromPresence(a.partner);
+        const mDock = computeMothershipDock(s.layout, partnerShip.layout);
+        const worldCell = mDock
+          ? mDock.mapPartnerCellToWorld(a.partner.crewCell)
+          : { ...a.partner.crewCell };
+
+        const pooled = poolMothershipPlasma(s.plasma, partnerShip.plasma);
+        s.plasma = pooled.total;
+        s.maxPlasma = s.maxPlasma + partnerShip.maxPlasma;
+
+        s.mothership.active = true;
+        s.mothership.connected = true;
+        s.mothership.channelStatus = 'docked';
+        s.mothership.partner = partnerShip;
+        s.mothership.localCombatReady = false;
+        s.mothership.partnerCombatReady = false;
+
+        s.partnerCrewCell = { ...worldCell };
+        s.partnerCrewPos = { ...worldCell };
+        s.partnerCrewFacing = mDock ? (a.partner.crewFacing + mDock.rotSteps) % 4 : a.partner.crewFacing;
+
+        push(
+          s,
+          `AIRLOCK CLAMPS LOCKED (#${s.mothership.roomCode})! Merged grids with ${partnerShip.name}. ${
+            a.isPrimary
+              ? 'You are Primary Control Ship.'
+              : `${partnerShip.name} is Primary Control Ship.`
+          }`,
+          'good',
+        );
+      } else if (s.mothership.partner) {
+        s.mothership.partner.name = a.partner.shipName;
+        s.mothership.partner.layout = a.partner.layout;
+        s.mothership.channelStatus = 'docked';
+        s.mothership.connected = true;
+      }
+      break;
+    }
+
+    case 'APPLY_SHIP_SYSTEM_UPDATE': {
+      const p = a.payload;
+      s.power = { ...p.power };
+      s.reactor = p.reactor;
+      s.plasma = p.plasma;
+      s.maxPlasma = p.maxPlasma;
+      s.scrap = p.scrap;
+      s.rankXp = p.rankXp;
+      s.spendXp = p.spendXp;
+      s.reputation = p.reputation;
+      s.hull = p.hull;
+      s.maxHull = p.maxHull;
+      s.shieldLayers = p.shieldLayers;
+      s.shieldCharge = p.shieldCharge;
+      if (p.roomHpByClient[a.myClientId]) {
+        s.roomHp = { ...p.roomHpByClient[a.myClientId] };
+      }
+      if (s.mothership.partner && p.roomHpByClient[p.senderId]) {
+        s.mothership.partner.roomHp = { ...p.roomHpByClient[p.senderId] };
+      }
+      s.oxygen = p.oxygen;
+      s.food = p.food;
+      s.artifacts = p.artifacts;
+      s.analyzing = p.analyzing;
+      s.eva = p.eva;
+      s.engineMode = p.engineMode;
+      s.healing = p.healing;
+      s.upgrades = { ...p.upgrades };
+      s.moduleLevels = { ...p.moduleLevels };
+      s.equippedWeapons = p.equippedWeapons.map((w) => ({ ...w }));
+      if (s.current !== p.current || s.sector !== p.sector) {
+        s.fx.jump += 1;
+      }
+      s.sector = p.sector;
+      s.current = p.current;
+      s.nodes = p.nodes;
+      s.encounter = p.encounter;
+      s.biome = p.biome;
+      s.faction = p.faction;
+      s.flareWarning = p.flareWarning;
+      s.arkCodex = { ...p.arkCodex };
+      s.activeStoryEvent = p.activeStoryEvent;
+      s.storyOutcome = p.storyOutcome;
+      s.paused = p.paused;
+      s.turn = p.turn;
+      if (p.latestLog && !s.log.some((entry) => entry.text === p.latestLog!.text && entry.id === p.latestLog!.id)) {
+        push(s, `[Co-Op] ${p.latestLog.text}`, p.latestLog.tone);
+      }
+      break;
+    }
+
+    case 'SET_COMBAT_READY': {
+      s.mothership.localCombatReady = a.ready ?? !s.mothership.localCombatReady;
+      break;
+    }
+
+    case 'APPLY_COMBAT_TARGET_LOCK': {
+      const p = a.payload;
+      s.equippedWeapons = p.equippedWeapons.map((w) => ({ ...w }));
+      s.mothership.partnerCombatReady = p.ready;
+      if (p.senderRole === 'primary') {
+        s.mothership.primaryTargetRoomId = p.focusRoomId;
+      } else {
+        s.mothership.wingmanTargetRoomId = p.focusRoomId;
+      }
+      break;
+    }
+
+    case 'APPLY_COMBAT_EXECUTE_TURN': {
+      const p = a.payload;
+      s.turn = p.turn;
+      s.plasma = p.plasma;
+      s.maxPlasma = p.maxPlasma;
+      s.scrap = p.scrap;
+      s.rankXp = p.rankXp;
+      s.spendXp = p.spendXp;
+      s.reputation = p.reputation;
+      s.hull = p.hull;
+      s.maxHull = p.maxHull;
+      s.shieldLayers = p.shieldLayers;
+      s.shieldCharge = p.shieldCharge;
+      if (p.roomHpByClient[a.myClientId]) {
+        s.roomHp = { ...p.roomHpByClient[a.myClientId] };
+      }
+      if (s.mothership.partner && p.roomHpByClient[p.senderId]) {
+        s.mothership.partner.roomHp = { ...p.roomHpByClient[p.senderId] };
+      }
+      s.equippedWeapons = p.equippedWeapons.map((w) => ({ ...w }));
+      s.encounter = p.encounter;
+      s.combatPhase = p.combatPhase;
+      s.projectiles = p.projectiles;
+      s.floatingDamages = p.floatingDamages;
+      s.fx = { ...p.fx };
+      s.autoCloak = p.autoCloak;
+      s.log = p.log;
+      s.logId = p.logId;
+      s.mothership.localCombatReady = false;
+      s.mothership.partnerCombatReady = false;
+      break;
+    }
+
     case 'UNDOCK_MOTHERSHIP': {
-      if (!s.mothership.active || !s.mothership.partner) break;
-      const total = s.plasma;
-      const playerSafe = Math.max(20, Math.round(total * 0.55));
-      s.plasma = Math.min(200 + s.upgrades.reactor * 40, playerSafe);
-      s.maxPlasma = 200 + s.upgrades.reactor * 40;
-      s.mothership.active = false;
-      s.mothership.partner = null;
-      s.mothership.connected = false;
+      const wasActive = s.mothership.active && !!s.mothership.partner;
+      if (wasActive) {
+        const soloMaxPlasma =
+          200 + s.upgrades.reactor * 40 + (s.moduleLevels?.kilopower_reactor ?? 0) * 25;
+        const poolTotal = a.sharedPlasmaSnapshot ?? s.plasma;
+        const safetyFloor = Math.max(25, Math.round(soloMaxPlasma * 0.15));
+        s.plasma = clamp(Math.max(safetyFloor, Math.round(poolTotal * 0.5)), safetyFloor, soloMaxPlasma);
+        s.maxPlasma = soloMaxPlasma;
+
+        // Return local astronaut safely to home ship Airlock if they were across the collar
+        const homeOcc = occupancy(s.layout);
+        if (!homeOcc.has(key(s.crew.cell))) {
+          const homeAirlock = s.layout.find((r) => r.id === 'airlock') ?? s.layout[0];
+          s.crew.cell = consoleCell(homeAirlock);
+          push(s, 'Returned your astronaut across the airlock to your home ship.', 'info');
+        }
+      }
+
+      s.mothership = {
+        ...s.mothership,
+        active: false,
+        partner: null,
+        connected: false,
+        channelStatus: 'disconnected',
+        errorMessage: undefined,
+        presenceShips: [],
+        localCombatReady: false,
+        partnerCombatReady: false,
+        primaryTargetRoomId: null,
+        wingmanTargetRoomId: null,
+      };
       s.partnerCrewPos = null;
-      push(s, 'Mothership undocked! Both ships maintain guaranteed 15% safety plasma reserves.', 'info');
+      s.partnerCrewCell = null;
+      s.shieldLayers = Math.min(s.shieldLayers, shieldMax(s));
+
+      if (wasActive) {
+        push(
+          s,
+          a.reason === 'partner_left'
+            ? 'Partner ship disconnected — grids separated, crew returned home & 50% Plasma split safely.'
+            : 'Mothership undocked! Grids separated & Plasma reserve split safely (>15% guaranteed).',
+          'info',
+        );
+      }
       break;
     }
 
@@ -1920,7 +2403,8 @@ export function reducer(state: GameState, a: Action): GameState {
     }
 
     case 'MOVE_PARTNER_CREW':
-      s.partnerCrewPos = a.cell;
+      s.partnerCrewPos = { ...a.cell };
+      s.partnerCrewCell = { ...a.cell };
       break;
 
     case 'TRIGGER_STORY_EVENT': {

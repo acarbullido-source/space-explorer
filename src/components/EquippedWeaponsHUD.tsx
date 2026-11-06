@@ -1,11 +1,13 @@
 import React from 'react';
 import {
+  Check,
   Crosshair,
   Flame,
   HelpCircle,
   Play,
   ShieldAlert,
   Sparkles,
+  Users,
   Zap,
 } from 'lucide-react';
 import type { WeaponSlot } from '../game/types';
@@ -20,6 +22,11 @@ interface Props {
   plasma: number;
   inCombat: boolean;
   enemyPresent: boolean;
+  coopNetworkActive?: boolean;
+  isPrimaryShip?: boolean;
+  localCombatReady?: boolean;
+  partnerCombatReady?: boolean;
+  onToggleCombatReady?: () => void;
 }
 
 export const EquippedWeaponsHUD: React.FC<Props> = ({
@@ -31,6 +38,11 @@ export const EquippedWeaponsHUD: React.FC<Props> = ({
   plasma,
   inCombat,
   enemyPresent,
+  coopNetworkActive = false,
+  isPrimaryShip = true,
+  localCombatReady = false,
+  partnerCombatReady = false,
+  onToggleCombatReady,
 }) => {
   const totalCost = equippedWeapons.reduce((sum, slot) => {
     if (!slot.targetRoomId) return sum;
@@ -97,11 +109,28 @@ export const EquippedWeaponsHUD: React.FC<Props> = ({
               )}
 
               {/* Footer: Target Lock Badge */}
-              <div className="mt-1 pt-1 border-t border-slate-800/80 flex items-center justify-between">
+              <div className="mt-1 pt-1 border-t border-slate-800/80 flex items-center justify-between gap-1">
                 {isTargeted ? (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-extrabold bg-red-500/20 text-red-200 border border-red-400/50 truncate">
-                    <Crosshair className="w-2.5 h-2.5 text-red-400 shrink-0" />
+                  <span
+                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] sm:text-[10px] font-extrabold border truncate ${
+                      coopNetworkActive && slot.lockedByRole === 'wingman'
+                        ? 'bg-purple-500/20 text-purple-200 border-purple-400/60'
+                        : 'bg-red-500/20 text-red-200 border-red-400/50'
+                    }`}
+                  >
+                    <Crosshair
+                      className={`w-2.5 h-2.5 shrink-0 ${
+                        coopNetworkActive && slot.lockedByRole === 'wingman'
+                          ? 'text-purple-300'
+                          : 'text-red-400'
+                      }`}
+                    />
                     <span className="truncate">{slot.targetRoomId}</span>
+                    {coopNetworkActive && slot.lockedByRole && (
+                      <span className="text-[8px] uppercase font-mono opacity-90">
+                        {slot.lockedByRole === 'wingman' ? 'P2' : 'P1'}
+                      </span>
+                    )}
                   </span>
                 ) : (
                   <span className="text-[9px] sm:text-[10px] text-slate-400 flex items-center gap-1">
@@ -118,23 +147,52 @@ export const EquippedWeaponsHUD: React.FC<Props> = ({
         })}
       </div>
 
-      {/* Execution / Tactical Turn Button */}
+      {/* Execution / Tactical Turn Button (+ Co-Op Ready Sync) */}
       {inCombat && enemyPresent && (
-        <div className="w-full flex items-center justify-center gap-2 px-1">
-          <button
-            type="button"
-            disabled={!hasEnoughPlasma}
-            onClick={onExecuteTurn}
-            className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 sm:px-6 py-2 rounded-xl sm:rounded-2xl text-xs font-black tracking-wide shadow-2xl transition active:scale-95 ${
-              hasEnoughPlasma
-                ? 'bg-gradient-to-r from-red-500 via-orange-500 to-amber-500 text-white shadow-[0_0_25px_rgba(239,68,68,0.5)] border border-red-300'
-                : 'bg-slate-800 text-slate-400 cursor-not-allowed border border-slate-700'
-            }`}
-          >
-            <Play className="w-4 h-4 fill-white shrink-0" />
-            <span>FIRE / END TURN</span>
-            {totalCost > 0 && <span className="font-mono text-cyan-200 ml-0.5">[{totalCost}P]</span>}
-          </button>
+        <div className="w-full flex flex-wrap items-center justify-center gap-1.5 sm:gap-2 px-1">
+          {coopNetworkActive && onToggleCombatReady && (
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={onToggleCombatReady}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl sm:rounded-2xl text-xs font-black tracking-wide border transition active:scale-95 ${
+                  localCombatReady
+                    ? 'bg-emerald-500 text-slate-950 border-emerald-300 shadow-[0_0_18px_rgba(16,185,129,0.5)]'
+                    : 'bg-slate-900/95 hover:bg-slate-800 text-emerald-300 border-emerald-500/50'
+                }`}
+              >
+                <Check className="w-4 h-4 shrink-0" />
+                <span>{localCombatReady ? 'READY!' : 'MARK READY'}</span>
+              </button>
+              <span
+                className={`px-2 py-1.5 rounded-xl text-[10px] font-extrabold border flex items-center gap-1 ${
+                  partnerCombatReady
+                    ? 'bg-purple-500/25 text-purple-200 border-purple-400/60'
+                    : 'bg-slate-900/80 text-slate-400 border-slate-700'
+                }`}
+              >
+                <Users className="w-3 h-3 shrink-0" />
+                <span>Partner: {partnerCombatReady ? 'READY' : 'Aiming…'}</span>
+              </span>
+            </div>
+          )}
+
+          {(!coopNetworkActive || isPrimaryShip) && (
+            <button
+              type="button"
+              disabled={!hasEnoughPlasma}
+              onClick={onExecuteTurn}
+              className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 px-4 sm:px-6 py-2 rounded-xl sm:rounded-2xl text-xs font-black tracking-wide shadow-2xl transition active:scale-95 ${
+                hasEnoughPlasma
+                  ? 'bg-gradient-to-r from-red-500 via-orange-500 to-amber-500 text-white shadow-[0_0_25px_rgba(239,68,68,0.5)] border border-red-300'
+                  : 'bg-slate-800 text-slate-400 cursor-not-allowed border border-slate-700'
+              }`}
+            >
+              <Play className="w-4 h-4 fill-white shrink-0" />
+              <span>{coopNetworkActive ? 'PRIMARY FIRE' : 'FIRE / END TURN'}</span>
+              {totalCost > 0 && <span className="font-mono text-cyan-200 ml-0.5">[{totalCost}P]</span>}
+            </button>
+          )}
 
           {onAutoCloakRetreat && (
             <button

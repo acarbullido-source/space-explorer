@@ -10,6 +10,7 @@ import {
   clampRoom,
   computeDock,
   computeDoors,
+  computeMothershipDock,
   consoleCell,
   dims,
   exposedSide,
@@ -23,7 +24,6 @@ import {
   validateLayout,
 } from '../game/layout';
 import { ROOMS } from '../game/rooms';
-import { mannedRoom } from '../game/state';
 import type { Cell, Dir, GameState, Layout, PlacedRoom, RoomId } from '../game/types';
 
 interface Props {
@@ -67,18 +67,32 @@ export const ShipView: React.FC<Props> = ({
   const activeLayout = editMode ? draftLayout : state.layout;
   const occ = useMemo(() => occupancy(activeLayout), [activeLayout]);
   const doors = useMemo(() => computeDoors(activeLayout, occ), [activeLayout, occ]);
-  const dock = useMemo(
+  const mothershipDock = useMemo(
     () =>
-      !editMode && (state.docked || (state.mothership.active && state.mothership.partner))
-        ? computeDock(state.layout)
+      !editMode && state.mothership.active && state.mothership.partner
+        ? computeMothershipDock(state.layout, state.mothership.partner.layout)
         : null,
-    [editMode, state.docked, state.mothership.active, state.mothership.partner, state.layout],
+    [editMode, state.mothership.active, state.mothership.partner, state.layout],
+  );
+  const partnerOcc = useMemo(
+    () => (mothershipDock ? occupancy(mothershipDock.partnerLayout) : null),
+    [mothershipDock],
+  );
+  const partnerDoors = useMemo(
+    () =>
+      mothershipDock && partnerOcc
+        ? computeDoors(mothershipDock.partnerLayout, partnerOcc)
+        : [],
+    [mothershipDock, partnerOcc],
+  );
+  const dock = useMemo(
+    () => (!editMode && state.docked ? computeDock(state.layout) : null),
+    [editMode, state.docked, state.layout],
   );
   const validation = useMemo(() => validateLayout(draftLayout), [draftLayout]);
-  const manned = useMemo(() => (editMode ? null : mannedRoom(state)), [editMode, state]);
 
-  // Compute outer hull bounding polygon around rooms (and docked partner ship if active)
-  const bounds = useMemo(() => {
+  // Bounding box of player's ship alone (for armored hull skirt)
+  const playerBounds = useMemo(() => {
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
@@ -89,6 +103,25 @@ export const ShipView: React.FC<Props> = ({
       minY = Math.min(minY, p.y);
       maxX = Math.max(maxX, p.x + w);
       maxY = Math.max(maxY, p.y + h);
+    }
+    if (!isFinite(minX)) return { minX: 1, minY: 1, maxX: 12, maxY: 7 };
+    return { minX, minY, maxX, maxY };
+  }, [activeLayout]);
+
+  // Combined outer bounds around player ship + docked Mothership / derelict for camera & shields
+  const bounds = useMemo(() => {
+    let { minX, minY, maxX, maxY } = playerBounds;
+    if (mothershipDock) {
+      minX = Math.min(minX, mothershipDock.partnerBounds.minX);
+      minY = Math.min(minY, mothershipDock.partnerBounds.minY);
+      maxX = Math.max(maxX, mothershipDock.partnerBounds.maxX);
+      maxY = Math.max(maxY, mothershipDock.partnerBounds.maxY);
+      for (const c of mothershipDock.collar) {
+        minX = Math.min(minX, c.x);
+        minY = Math.min(minY, c.y);
+        maxX = Math.max(maxX, c.x + 1);
+        maxY = Math.max(maxY, c.y + 1);
+      }
     }
     if (dock) {
       minX = Math.min(minX, dock.partner.x);
@@ -102,9 +135,8 @@ export const ShipView: React.FC<Props> = ({
         maxY = Math.max(maxY, t.y + 1);
       }
     }
-    if (!isFinite(minX)) return { minX: 1, minY: 1, maxX: 12, maxY: 7 };
     return { minX, minY, maxX, maxY };
-  }, [activeLayout, dock]);
+  }, [playerBounds, mothershipDock, dock]);
 
   const clientToGrid = (clientX: number, clientY: number): { gx: number; gy: number } | null => {
     const svg = svgRef.current;
@@ -161,11 +193,22 @@ export const ShipView: React.FC<Props> = ({
     onChangeDraft(updated);
   };
 
-  // Determine whether a door has crew nearby so it slides open
+  // Determine whether a door has either player's astronaut nearby so it slides open
   const isDoorOpen = (a: Cell, b: Cell) => {
-    const d1 = Math.hypot(crewPos.x - a.x, crewPos.y - a.y);
-    const d2 = Math.hypot(crewPos.x - b.x, crewPos.y - b.y);
-    return Math.min(d1, d2) < 1.35;
+    const d1 = Math.min(
+      Math.hypot(crewPos.x - a.x, crewPos.y - a.y),
+      Math.hypot(crewPos.x - b.x, crewPos.y - b.y),
+    );
+    if (d1 < 1.35) return true;
+    if (state.mothership.active && state.partnerCrewPos) {
+      const p = state.partnerCrewPos;
+      const d2 = Math.min(
+        Math.hypot(p.x - a.x, p.y - a.y),
+        Math.hypot(p.x - b.x, p.y - b.y),
+      );
+      if (d2 < 1.35) return true;
+    }
+    return false;
   };
 
   const viewW = (CHASSIS.w + 2) * TILE;
@@ -323,18 +366,18 @@ export const ShipView: React.FC<Props> = ({
             </g>
           )}
 
-          {/* Outer Spaceship Hull Plating Silhouette */}
+          {/* Outer Spaceship Hull Plating Silhouette (Player Vessel) */}
           {!editMode && (
             <g>
-              {/* Main armored hull skirt around all rooms */}
+              {/* Main armored hull skirt around player rooms */}
               <path
-                d={`M ${(bounds.minX - 0.45) * TILE} ${(bounds.minY + 0.3) * TILE}
-                    L ${(bounds.minX + 0.2) * TILE} ${(bounds.minY - 0.38) * TILE}
-                    L ${(bounds.maxX - 0.3) * TILE} ${(bounds.minY - 0.38) * TILE}
-                    L ${(bounds.maxX + 0.75) * TILE} ${((bounds.minY + bounds.maxY) / 2) * TILE}
-                    L ${(bounds.maxX - 0.3) * TILE} ${(bounds.maxY + 0.38) * TILE}
-                    L ${(bounds.minX + 0.2) * TILE} ${(bounds.maxY + 0.38) * TILE}
-                    L ${(bounds.minX - 0.45) * TILE} ${(bounds.maxY - 0.3) * TILE}
+                d={`M ${(playerBounds.minX - 0.45) * TILE} ${(playerBounds.minY + 0.3) * TILE}
+                    L ${(playerBounds.minX + 0.2) * TILE} ${(playerBounds.minY - 0.38) * TILE}
+                    L ${(playerBounds.maxX - 0.3) * TILE} ${(playerBounds.minY - 0.38) * TILE}
+                    L ${(playerBounds.maxX + 0.75) * TILE} ${((playerBounds.minY + playerBounds.maxY) / 2) * TILE}
+                    L ${(playerBounds.maxX - 0.3) * TILE} ${(playerBounds.maxY + 0.38) * TILE}
+                    L ${(playerBounds.minX + 0.2) * TILE} ${(playerBounds.maxY + 0.38) * TILE}
+                    L ${(playerBounds.minX - 0.45) * TILE} ${(playerBounds.maxY - 0.3) * TILE}
                     Z`}
                 fill="url(#hullMetal)"
                 stroke="#475569"
@@ -343,19 +386,19 @@ export const ShipView: React.FC<Props> = ({
               />
               {/* Wing panel seam lines */}
               <line
-                x1={bounds.minX * TILE}
-                y1={(bounds.minY - 0.2) * TILE}
-                x2={(bounds.maxX - 0.5) * TILE}
-                y2={(bounds.minY - 0.2) * TILE}
+                x1={playerBounds.minX * TILE}
+                y1={(playerBounds.minY - 0.2) * TILE}
+                x2={(playerBounds.maxX - 0.5) * TILE}
+                y2={(playerBounds.minY - 0.2) * TILE}
                 stroke="#64748b"
                 strokeWidth={1.5}
                 strokeDasharray="18 8"
               />
               <line
-                x1={bounds.minX * TILE}
-                y1={(bounds.maxY + 0.2) * TILE}
-                x2={(bounds.maxX - 0.5) * TILE}
-                y2={(bounds.maxY + 0.2) * TILE}
+                x1={playerBounds.minX * TILE}
+                y1={(playerBounds.maxY + 0.2) * TILE}
+                x2={(playerBounds.maxX - 0.5) * TILE}
+                y2={(playerBounds.maxY + 0.2) * TILE}
                 stroke="#64748b"
                 strokeWidth={1.5}
                 strokeDasharray="18 8"
@@ -448,7 +491,10 @@ export const ShipView: React.FC<Props> = ({
             const cells = roomCells(p);
             const cCell = consoleCell(p);
             const hp = state.roomHp[p.id];
-            const isManned = manned === p.id;
+            const isManned =
+              !editMode &&
+              (same(cCell, state.crew.cell) ||
+                (state.mothership.active && same(cCell, state.partnerCrewCell)));
             const isHit = state.fx.hitRoom === p.id && state.fx.hitId > 0;
             const isSelected = editMode && selectedRoom === p.id;
             const hasOverlap = editMode && validation.overlaps.has(p.id);
@@ -722,10 +768,343 @@ export const ShipView: React.FC<Props> = ({
             }
           })}
 
-          {/* Docked Partner Ship & Boarding Tube (Supports both Derelict/Trader Docking and Mothership Co-Op) */}
-          {dock && (state.docked || (state.mothership.active && state.mothership.partner)) && (
+          {/* FULL MERGED 6-ROOM PARTNER SHIP + AIRLOCK DOCKING COLLAR (MOTHERSHIP CO-OP) */}
+          {mothershipDock && state.mothership.active && state.mothership.partner && (
             <g>
-              {/* Pressurized Docking Tunnel with Magnetic Accordion Clamps */}
+              {/* Partner Outer Spaceship Hull Plating Silhouette */}
+              {(() => {
+                const pb = mothershipDock.partnerBounds;
+                return (
+                  <g>
+                    <path
+                      d={`M ${(pb.minX - 0.45) * TILE} ${(pb.minY + 0.3) * TILE}
+                          L ${(pb.minX + 0.2) * TILE} ${(pb.minY - 0.38) * TILE}
+                          L ${(pb.maxX - 0.3) * TILE} ${(pb.minY - 0.38) * TILE}
+                          L ${(pb.maxX + 0.65) * TILE} ${((pb.minY + pb.maxY) / 2) * TILE}
+                          L ${(pb.maxX - 0.3) * TILE} ${(pb.maxY + 0.38) * TILE}
+                          L ${(pb.minX + 0.2) * TILE} ${(pb.maxY + 0.38) * TILE}
+                          L ${(pb.minX - 0.45) * TILE} ${(pb.maxY - 0.3) * TILE}
+                          Z`}
+                      fill="url(#hullMetal)"
+                      stroke="#38bdf8"
+                      strokeOpacity={0.65}
+                      strokeWidth={2.8}
+                      strokeLinejoin="round"
+                    />
+                    {/* Partner Callsign & Primary Control Badge */}
+                    <rect
+                      x={((pb.minX + pb.maxX) / 2 - 2.6) * TILE}
+                      y={(pb.maxY + 0.45) * TILE}
+                      width={5.2 * TILE}
+                      height={22}
+                      rx={6}
+                      fill="rgba(2, 6, 23, 0.92)"
+                      stroke={state.mothership.primaryShip === 'partner' ? '#fbbf24' : '#38bdf8'}
+                      strokeWidth={1.2}
+                    />
+                    <text
+                      x={((pb.minX + pb.maxX) / 2) * TILE}
+                      y={(pb.maxY + 0.45) * TILE + 15}
+                      fill={state.mothership.primaryShip === 'partner' ? '#fde68a' : '#7dd3fc'}
+                      fontSize={10}
+                      fontWeight={800}
+                      textAnchor="middle"
+                      fontFamily="monospace"
+                    >
+                      {state.mothership.primaryShip === 'partner'
+                        ? `★ PRIMARY: ${state.mothership.partner.name}`
+                        : `CO-OP DOCKED: ${state.mothership.partner.name}`}
+                    </text>
+                  </g>
+                );
+              })()}
+
+              {/* Pressurized Airlock Docking Collar Connecting Both Ships */}
+              {mothershipDock.collar.map((c) => {
+                const onPath = path.some((pc) => same(pc, c));
+                return (
+                  <g
+                    key={`collar-${key(c)}`}
+                    onClick={() => onTileClick(c)}
+                    className="cursor-pointer"
+                  >
+                    <rect
+                      x={c.x * TILE + 3}
+                      y={c.y * TILE + 3}
+                      width={TILE - 6}
+                      height={TILE - 6}
+                      rx={6}
+                      fill="#0f172a"
+                      stroke="#22d3ee"
+                      strokeWidth={2}
+                      strokeDasharray="7 4"
+                    />
+                    <circle
+                      cx={(c.x + 0.5) * TILE}
+                      cy={(c.y + 0.5) * TILE}
+                      r={onPath ? 5 : 3}
+                      fill={onPath ? '#4ade80' : '#22d3ee'}
+                      opacity={0.85}
+                    />
+                  </g>
+                );
+              })}
+
+              {/* Partner Ship All 6 Rooms & Consoles */}
+              {mothershipDock.partnerLayout.map((p) => {
+                const def = ROOMS[p.id];
+                const { w, h } = dims(p);
+                const cells = roomCells(p);
+                const cCell = consoleCell(p);
+                const hp = state.mothership.partner?.roomHp[p.id] ?? def.maxHp;
+                const isManned =
+                  same(cCell, state.crew.cell) || same(cCell, state.partnerCrewCell);
+                const Icon = def.icon;
+                const hatch = hatchOf(p);
+
+                return (
+                  <g
+                    key={`partner-room-${p.id}`}
+                    onMouseEnter={() => setHoveredRoom(p.id)}
+                    onMouseLeave={() => setHoveredRoom((prev) => (prev === p.id ? null : prev))}
+                    className="cursor-pointer"
+                  >
+                    {cells.map((c) => {
+                      const alt = (c.x + c.y) % 2 === 1;
+                      const onPath = path.some((pc) => same(pc, c));
+                      return (
+                        <g
+                          key={`pcell-${key(c)}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onTileClick(c);
+                          }}
+                        >
+                          <rect
+                            x={c.x * TILE}
+                            y={c.y * TILE}
+                            width={TILE}
+                            height={TILE}
+                            fill={alt ? def.theme.floorAlt : def.theme.floor}
+                            stroke="rgba(148, 163, 184, 0.16)"
+                            strokeWidth={1}
+                          />
+                          <circle cx={c.x * TILE + 5} cy={c.y * TILE + 5} r={1} fill="rgba(255,255,255,0.16)" />
+                          <circle cx={(c.x + 1) * TILE - 5} cy={(c.y + 1) * TILE - 5} r={1} fill="rgba(255,255,255,0.16)" />
+                          {onPath && (
+                            <circle
+                              cx={(c.x + 0.5) * TILE}
+                              cy={(c.y + 0.5) * TILE}
+                              r={5}
+                              fill={def.theme.accent}
+                              opacity={0.75}
+                            />
+                          )}
+                        </g>
+                      );
+                    })}
+
+                    <rect
+                      x={p.x * TILE + 1.5}
+                      y={p.y * TILE + 1.5}
+                      width={w * TILE - 3}
+                      height={h * TILE - 3}
+                      rx={6}
+                      fill={hp === 0 ? 'rgba(239, 68, 68, 0.18)' : 'none'}
+                      stroke={def.theme.accent}
+                      strokeWidth={2.2}
+                    />
+
+                    {hatch && (
+                      <g>
+                        {hatch.cells.map((hc) => {
+                          const hx = hc.x * TILE;
+                          const hy = hc.y * TILE;
+                          const strip =
+                            hatch.dir === 'S'
+                              ? { x: hx + 6, y: hy + TILE - 6, w: TILE - 12, h: 6 }
+                              : hatch.dir === 'N'
+                                ? { x: hx + 6, y: hy, w: TILE - 12, h: 6 }
+                                : hatch.dir === 'E'
+                                  ? { x: hx + TILE - 6, y: hy + 6, w: 6, h: TILE - 12 }
+                                  : { x: hx, y: hy + 6, w: 6, h: TILE - 12 };
+                          return (
+                            <rect
+                              key={`phatch-${key(hc)}`}
+                              x={strip.x}
+                              y={strip.y}
+                              width={strip.w}
+                              height={strip.h}
+                              fill="#22d3ee"
+                              rx={2}
+                            />
+                          );
+                        })}
+                      </g>
+                    )}
+
+                    {/* Partner Room Interactive Console */}
+                    <g
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onConsoleClick(p.id, cCell);
+                      }}
+                    >
+                      <rect
+                        x={cCell.x * TILE + 7}
+                        y={cCell.y * TILE + 7}
+                        width={TILE - 14}
+                        height={TILE - 14}
+                        rx={8}
+                        fill={isManned ? 'rgba(34, 197, 94, 0.28)' : 'rgba(15, 23, 42, 0.82)'}
+                        stroke={isManned ? '#4ade80' : def.theme.accent}
+                        strokeWidth={2}
+                        className="animate-pulseGlow"
+                      />
+                      <rect
+                        x={cCell.x * TILE + 13}
+                        y={cCell.y * TILE + 12}
+                        width={TILE - 26}
+                        height={9}
+                        rx={2}
+                        fill={isManned ? '#4ade80' : def.theme.accent}
+                        opacity={0.9}
+                      />
+                      <text
+                        x={(cCell.x + 0.5) * TILE}
+                        y={(cCell.y + 0.72) * TILE}
+                        textAnchor="middle"
+                        fill="#e2e8f0"
+                        fontSize={9}
+                        fontWeight={700}
+                        fontFamily="monospace"
+                      >
+                        [E]
+                      </text>
+                    </g>
+
+                    <foreignObject
+                      x={p.x * TILE}
+                      y={p.y * TILE}
+                      width={w * TILE}
+                      height={h * TILE}
+                      className="pointer-events-none"
+                    >
+                      <div className="w-full h-full flex flex-col items-center justify-between p-1.5">
+                        <div className="w-full flex items-center justify-between gap-1 px-1">
+                          <span
+                            className="text-[10px] font-bold uppercase tracking-wider truncate px-1.5 py-0.5 rounded bg-slate-950/85 border border-white/10"
+                            style={{ color: def.theme.accent }}
+                          >
+                            {def.name}
+                          </span>
+                          <div className="flex items-center gap-0.5 bg-slate-950/85 px-1 py-0.5 rounded border border-white/10">
+                            {Array.from({ length: def.maxHp }).map((_, i) => (
+                              <span
+                                key={i}
+                                className={`w-2 h-2 rounded-[2px] ${
+                                  i < hp
+                                    ? hp <= 1
+                                      ? 'bg-red-400'
+                                      : 'bg-emerald-400'
+                                    : 'bg-slate-700'
+                                }`}
+                              />
+                            ))}
+                          </div>
+                        </div>
+
+                        <div
+                          className="flex items-center justify-center rounded-full p-2 border"
+                          style={{
+                            backgroundColor: 'rgba(2, 6, 23, 0.55)',
+                            borderColor: `${def.theme.accent}55`,
+                          }}
+                        >
+                          <Icon className="w-5 h-5" style={{ color: def.theme.accent }} />
+                        </div>
+
+                        <div className="w-full flex items-center justify-center min-h-[20px]">
+                          {isManned && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-extrabold tracking-wide bg-emerald-500/25 text-emerald-300 border border-emerald-400/70 shadow-[0_0_12px_rgba(16,185,129,0.5)]">
+                              <UserCheck className="w-2.5 h-2.5" />
+                              MANNED (+25%)
+                            </span>
+                          )}
+                          {!isManned && hp < def.maxHp && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-red-500/25 text-red-300 border border-red-400/50">
+                              <Wrench className="w-2.5 h-2.5" />
+                              DAMAGED
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </foreignObject>
+                  </g>
+                );
+              })}
+
+              {/* Partner Ship Automatic Sliding Doors */}
+              {partnerDoors.map((d) => {
+                const open = isDoorOpen(d.a, d.b);
+                const verticalWall = d.a.x !== d.b.x;
+                const wx = Math.max(d.a.x, d.b.x) * TILE;
+                const wy = Math.max(d.a.y, d.b.y) * TILE;
+                if (verticalWall) {
+                  const cy = (d.a.y + 0.5) * TILE;
+                  const leaf = open ? 5 : 13;
+                  return (
+                    <g key={`pdoor-${d.id}`}>
+                      <rect x={wx - 4} y={cy - 15} width={8} height={30} fill="#020617" />
+                      <rect
+                        x={wx - 3}
+                        y={cy - 14}
+                        width={6}
+                        height={leaf}
+                        rx={1.5}
+                        fill={open ? '#22d3ee' : '#94a3b8'}
+                      />
+                      <rect
+                        x={wx - 3}
+                        y={cy + 14 - leaf}
+                        width={6}
+                        height={leaf}
+                        rx={1.5}
+                        fill={open ? '#22d3ee' : '#94a3b8'}
+                      />
+                    </g>
+                  );
+                }
+                const cx = (d.a.x + 0.5) * TILE;
+                const leaf = open ? 5 : 13;
+                return (
+                  <g key={`pdoor-${d.id}`}>
+                    <rect x={cx - 15} y={wy - 4} width={30} height={8} fill="#020617" />
+                    <rect
+                      x={cx - 14}
+                      y={wy - 3}
+                      width={leaf}
+                      height={6}
+                      rx={1.5}
+                      fill={open ? '#22d3ee' : '#94a3b8'}
+                    />
+                    <rect
+                      x={cx + 14 - leaf}
+                      y={wy - 3}
+                      width={leaf}
+                      height={6}
+                      rx={1.5}
+                      fill={open ? '#22d3ee' : '#94a3b8'}
+                    />
+                  </g>
+                );
+              })}
+            </g>
+          )}
+
+          {/* Docked Derelict / Trader Boarding Tube (3x3 External Vessel) */}
+          {dock && state.docked && (
+            <g>
               {dock.tube.map((c) => (
                 <g
                   key={key(c)}
@@ -739,22 +1118,20 @@ export const ShipView: React.FC<Props> = ({
                     height={TILE - 12}
                     rx={6}
                     fill="#1e293b"
-                    stroke={state.mothership.active ? '#22d3ee' : '#fbbf24'}
+                    stroke="#fbbf24"
                     strokeWidth={2}
                     strokeDasharray="6 4"
                   />
-                  {/* Subtle magnetic clamp hatch lights */}
                   <circle
                     cx={(c.x + 0.5) * TILE}
                     cy={(c.y + 0.5) * TILE}
                     r={3}
-                    fill={state.mothership.active ? '#22d3ee' : '#fbbf24'}
+                    fill="#fbbf24"
                     opacity={0.8}
                   />
                 </g>
               ))}
 
-              {/* Partner Ship Interior Grid */}
               {dock.partnerCells.map((c) => (
                 <g
                   key={key(c)}
@@ -766,23 +1143,15 @@ export const ShipView: React.FC<Props> = ({
                     y={c.y * TILE}
                     width={TILE}
                     height={TILE}
-                    fill={
-                      state.mothership.active
-                        ? '#082f49'
-                        : state.docked?.partner === 'derelict'
-                          ? '#1c1917'
-                          : '#172554'
-                    }
-                    stroke={state.mothership.active ? 'rgba(34, 211, 238, 0.4)' : 'rgba(251, 191, 36, 0.28)'}
+                    fill={state.docked?.partner === 'derelict' ? '#1c1917' : '#172554'}
+                    stroke="rgba(251, 191, 36, 0.28)"
                     strokeWidth={1}
                   />
-                  {/* Deck rivets */}
                   <circle cx={c.x * TILE + 5} cy={c.y * TILE + 5} r={1} fill="rgba(255,255,255,0.2)" />
                   <circle cx={(c.x + 1) * TILE - 5} cy={(c.y + 1) * TILE - 5} r={1} fill="rgba(255,255,255,0.2)" />
                 </g>
               ))}
 
-              {/* Partner Hull Perimeter Border */}
               <rect
                 x={dock.partner.x * TILE}
                 y={dock.partner.y * TILE}
@@ -790,39 +1159,11 @@ export const ShipView: React.FC<Props> = ({
                 height={dock.partner.h * TILE}
                 rx={8}
                 fill="none"
-                stroke={state.mothership.active ? '#38bdf8' : '#fbbf24'}
+                stroke="#fbbf24"
                 strokeWidth={2.5}
               />
 
-              {/* Mothership Wingman Label & Status */}
-              {state.mothership.active && state.mothership.partner && (
-                <g className="pointer-events-none">
-                  <rect
-                    x={dock.partner.x * TILE + 8}
-                    y={dock.partner.y * TILE - 20}
-                    width={dock.partner.w * TILE - 16}
-                    height={18}
-                    rx={4}
-                    fill="rgba(15, 23, 42, 0.85)"
-                    stroke="#38bdf8"
-                    strokeWidth={1}
-                  />
-                  <text
-                    x={(dock.partner.x + dock.partner.w / 2) * TILE}
-                    y={dock.partner.y * TILE - 7}
-                    fill="#38bdf8"
-                    fontSize={9}
-                    fontWeight="bold"
-                    textAnchor="middle"
-                    fontFamily="monospace"
-                  >
-                    {state.mothership.primaryShip === 'partner' ? '★ PRIMARY HELM' : 'WINGMAN (MOTHERSHIP)'}
-                  </text>
-                </g>
-              )}
-
-              {/* Salvage / Gift Crates on Derelict/Trader Deck */}
-              {state.docked?.crates.map((crate) => (
+              {state.docked.crates.map((crate) => (
                 <g
                   key={key(crate)}
                   onClick={() => onTileClick(crate)}
@@ -851,29 +1192,6 @@ export const ShipView: React.FC<Props> = ({
                   </foreignObject>
                 </g>
               ))}
-
-              {/* Partner Crew Member Sprite stationed in Mothership Wingman deck */}
-              {state.mothership.active && state.mothership.partner && (
-                <g
-                  transform={`translate(${
-                    ((state.partnerCrewPos?.x ?? dock.partnerCells[0]?.x ?? dock.partner.x) + 0.5) * TILE
-                  }, ${
-                    ((state.partnerCrewPos?.y ?? dock.partnerCells[0]?.y ?? dock.partner.y) + 0.5) * TILE
-                  })`}
-                  className="pointer-events-none"
-                >
-                  {/* Partner soft selection halo */}
-                  <circle r={18} fill="rgba(251, 146, 60, 0.25)" stroke="#fb923c" strokeWidth={1.5} />
-                  {/* Backpack */}
-                  <rect x={-12} y={-8} width={7} height={16} rx={2.5} fill="#fdba74" stroke="#0f172a" strokeWidth={1.5} />
-                  {/* Shoulders / Torso */}
-                  <ellipse cx={-1} cy={0} rx={9} ry={12} fill="#ffedd5" stroke="#0f172a" strokeWidth={1.8} />
-                  {/* Helmet dome */}
-                  <circle cx={1} cy={0} r={8.5} fill="#fed7aa" stroke="#0f172a" strokeWidth={1.8} />
-                  {/* Visor */}
-                  <path d="M 1 -5.5 Q 8.5 0 1 5.5 Q 4.5 0 1 -5.5 Z" fill="#c084fc" stroke="#7e22ce" strokeWidth={1} />
-                </g>
-              )}
             </g>
           )}
 
@@ -913,6 +1231,33 @@ export const ShipView: React.FC<Props> = ({
                   </g>
                 );
               })()}
+            </g>
+          )}
+
+          {/* Top-Down Partner Astronaut Sprite (Walks freely across either docked Mothership hull) */}
+          {!editMode && state.mothership.active && state.mothership.partner && state.partnerCrewPos && (
+            <g
+              transform={`translate(${(state.partnerCrewPos.x + 0.5) * TILE}, ${(state.partnerCrewPos.y + 0.5) * TILE})`}
+              className="pointer-events-none"
+            >
+              <g
+                transform={`rotate(${DIR_ANGLE[['E', 'S', 'W', 'N'][state.partnerCrewFacing % 4] as Dir] ?? 0})`}
+              >
+                <circle r={18} fill="rgba(192, 132, 252, 0.25)" stroke="#c084fc" strokeWidth={1.6} />
+                <rect x={-12} y={-8} width={7} height={16} rx={2.5} fill="#e9d5ff" stroke="#0f172a" strokeWidth={1.5} />
+                <ellipse cx={-1} cy={0} rx={9} ry={12} fill="#f3e8ff" stroke="#0f172a" strokeWidth={1.8} />
+                <circle cx={1} cy={0} r={8.5} fill="#faf5ff" stroke="#0f172a" strokeWidth={1.8} />
+                <path
+                  d="M 1 -5.5 Q 8.5 0 1 5.5 Q 4.5 0 1 -5.5 Z"
+                  fill="#fbbf24"
+                  stroke="#b45309"
+                  strokeWidth={1}
+                />
+              </g>
+              <rect x={-18} y={-30} width={36} height={13} rx={4} fill="rgba(15, 23, 42, 0.9)" stroke="#c084fc" strokeWidth={1} />
+              <text x={0} y={-20} textAnchor="middle" fill="#e9d5ff" fontSize={8} fontWeight={800} fontFamily="monospace">
+                CO-OP
+              </text>
             </g>
           )}
 

@@ -364,13 +364,18 @@ export function checkBlueRequirement(req: BlueRequirement, state: GameState): bo
   if (req.type === 'manned' && req.room) {
     for (const p of state.layout) {
       if (p.id === req.room) {
-        // Check if crew cell matches room console cell
-        return (
+        const inPlayer =
           state.crew.cell.x >= p.x &&
           state.crew.cell.x <= p.x + 3 &&
           state.crew.cell.y >= p.y &&
-          state.crew.cell.y <= p.y + 3
-        );
+          state.crew.cell.y <= p.y + 3;
+        const inPartner =
+          !!state.partnerCrewCell &&
+          state.partnerCrewCell.x >= p.x &&
+          state.partnerCrewCell.x <= p.x + 3 &&
+          state.partnerCrewCell.y >= p.y &&
+          state.partnerCrewCell.y <= p.y + 3;
+        return inPlayer || inPartner;
       }
     }
   }
